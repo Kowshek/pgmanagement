@@ -32,6 +32,14 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Copy application code
 COPY app ./app
 
+# Copy Alembic config + migration scripts too — not imported by the app at
+# runtime, but needed so `alembic upgrade head` can actually run inside this
+# image (e.g. Railway's preDeployCommand). Without these two, the container
+# has no alembic.ini/versions to find and migrations silently can't run
+# in-container, only from a developer's own machine against the DB directly.
+COPY alembic.ini ./
+COPY alembic ./alembic
+
 # Set ownership
 RUN chown -R appuser:appuser /app
 

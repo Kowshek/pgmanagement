@@ -58,3 +58,7 @@ docker-compose.override.yml
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+
+
+GEMINI_IMPLEMENTATION_ROADMAP.md
+DEPLOY.md
