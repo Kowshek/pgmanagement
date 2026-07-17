@@ -12,10 +12,14 @@ services:
       # Mount the entire backend root to support hot reload of app, alembic, etc.
       - ../:/app
     environment:
-      # These overrides ensure the containers talk to each other if .env is missing/incomplete
+      # These overrides ensure the containers talk to each other if .env is missing/incomplete.
+      # JWT_SECRET is deliberately NOT hardcoded here — docker-compose's `environment:`
+      # takes precedence over `env_file`, so a secret listed here would silently
+      # override whatever real secret is set in .env, in every environment
+      # including production. It must come from .env (or the host's real secret
+      # manager) only.
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/pgmanager
       - REDIS_URL=redis://redis:6379/0
-      - JWT_SECRET=super_secret_key_change_in_production
     env_file:
       - ../.env
     depends_on:

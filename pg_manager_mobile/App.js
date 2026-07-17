@@ -13,6 +13,7 @@ import {
   PlusJakartaSans_700Bold,
   useFonts,
 } from '@expo-google-fonts/plus-jakarta-sans';
+import { Platform, StyleSheet, View, useWindowDimensions } from 'react-native';
 
 import ConfirmDialog from './src/components/ConfirmDialog';
 import ErrorBoundary from './src/components/ErrorBoundary';
@@ -49,7 +50,7 @@ function MainTabs() {
           borderTopWidth: 1,
           elevation: 0,
           height: 65,
-          paddingBottom: 10,
+          paddingBottom: Platform.OS === 'web' ? 0 : 10,
           paddingTop: 8,
         },
         headerShown: false,
@@ -95,6 +96,9 @@ export default function App() {
   const properties = useStore((s) => s.properties);
   const bootstrap = useStore((s) => s.bootstrap);
 
+  const { width } = useWindowDimensions();
+  const isDesktopWeb = Platform.OS === 'web' && width >= 768;
+
   useEffect(() => {
     bootstrap();
   }, [bootstrap]);
@@ -108,35 +112,67 @@ export default function App() {
 
   if (!ready) return null;
 
+  const appContent = (
+    <SafeAreaProvider onLayout={onLayoutRootView}>
+      <StatusBar style="dark" />
+      <NavigationContainer>
+        <Stack.Navigator screenOptions={{ headerShown: false }}>
+          {!user ? (
+            <>
+              <Stack.Screen name="Login" component={LoginScreen} />
+              <Stack.Screen name="Register" component={RegisterScreen} />
+            </>
+          ) : properties.length === 0 ? (
+            <Stack.Screen name="CreateProperty" component={CreatePropertyScreen} />
+          ) : (
+            <>
+              <Stack.Screen name="Main" component={MainTabs} />
+              <Stack.Screen name="GuestDetail" component={GuestDetailScreen} />
+              <Stack.Screen name="Settings" component={SettingsScreen} />
+              <Stack.Group screenOptions={{ presentation: 'modal' }}>
+                <Stack.Screen name="GuestForm" component={GuestFormModal} />
+                <Stack.Screen name="RoomForm" component={RoomFormModal} />
+                <Stack.Screen name="RecordPayment" component={RecordPaymentModal} />
+              </Stack.Group>
+            </>
+          )}
+        </Stack.Navigator>
+      </NavigationContainer>
+      <ConfirmDialog />
+    </SafeAreaProvider>
+  );
+
   return (
     <ErrorBoundary>
-      <SafeAreaProvider onLayout={onLayoutRootView}>
-        <StatusBar style="dark" />
-        <NavigationContainer>
-          <Stack.Navigator screenOptions={{ headerShown: false }}>
-            {!user ? (
-              <>
-                <Stack.Screen name="Login" component={LoginScreen} />
-                <Stack.Screen name="Register" component={RegisterScreen} />
-              </>
-            ) : properties.length === 0 ? (
-              <Stack.Screen name="CreateProperty" component={CreatePropertyScreen} />
-            ) : (
-              <>
-                <Stack.Screen name="Main" component={MainTabs} />
-                <Stack.Screen name="GuestDetail" component={GuestDetailScreen} />
-                <Stack.Screen name="Settings" component={SettingsScreen} />
-                <Stack.Group screenOptions={{ presentation: 'modal' }}>
-                  <Stack.Screen name="GuestForm" component={GuestFormModal} />
-                  <Stack.Screen name="RoomForm" component={RoomFormModal} />
-                  <Stack.Screen name="RecordPayment" component={RecordPaymentModal} />
-                </Stack.Group>
-              </>
-            )}
-          </Stack.Navigator>
-        </NavigationContainer>
-        <ConfirmDialog />
-      </SafeAreaProvider>
+      {isDesktopWeb ? (
+        <View style={styles.webRoot}>
+          <View style={styles.webAppContainer}>{appContent}</View>
+        </View>
+      ) : (
+        appContent
+      )}
     </ErrorBoundary>
   );
 }
+
+const styles = StyleSheet.create({
+  webRoot: {
+    flex: 1,
+    backgroundColor: theme.colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  webAppContainer: {
+    height: '100%',
+    maxHeight: 932,
+    aspectRatio: 390 / 844,
+    backgroundColor: theme.colors.background,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.15,
+    shadowRadius: 32,
+    elevation: 5,
+    overflow: 'hidden',
+    borderRadius: Platform.OS === 'web' ? 24 : 0,
+  },
+});

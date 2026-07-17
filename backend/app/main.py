@@ -1,12 +1,9 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from app.api.v1.api import api_router
-from app.api.v1.deps import get_db
 from app.core.config import settings
 from app.core.rate_limit import limiter
 
@@ -40,10 +37,3 @@ app.include_router(api_router, prefix="/api/v1")
 @app.get("/health", tags=["health"])
 async def health_check():
     return {"status": "ok"}
-
-# TODO: Remove this temporary endpoint once real endpoints exist
-@app.get("/debug/db-check", tags=["debug"])
-async def db_check(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(text("SELECT 1"))
-    value = result.scalar()
-    return {"db_status": "ok", "value": value}

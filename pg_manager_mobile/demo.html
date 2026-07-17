@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PG Manager - App Demo</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background-color: #f0f2f5;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    /* The phone frame */
+    .device-frame {
+      position: relative;
+      width: 390px;
+      height: 844px;
+      background-color: #000;
+      border-radius: 48px;
+      box-shadow: 
+        0 0 0 2px #c8cacb,          /* Outer metallic rim */
+        0 0 0 4px #e2e3e4,          /* Lighter reflection */
+        0 24px 48px rgba(0,0,0,0.2),/* Drop shadow */
+        inset 0 0 0 12px #000;      /* Inner bezel */
+      padding: 12px;
+      box-sizing: border-box;
+      /* Scale down on smaller screens */
+      transform-origin: center center;
+    }
+
+    /* Responsive scaling for laptops/smaller monitors */
+    @media (max-height: 950px) {
+      .device-frame { transform: scale(0.9); }
+    }
+    @media (max-height: 850px) {
+      .device-frame { transform: scale(0.8); }
+    }
+    @media (max-height: 750px) {
+      .device-frame { transform: scale(0.7); }
+    }
+    @media (max-height: 650px) {
+      .device-frame { transform: scale(0.6); }
+    }
+
+    /* Side Buttons */
+    .button {
+      position: absolute;
+      background-color: #c8cacb;
+      border-radius: 2px;
+    }
+    /* Silencer */
+    .btn-silence { top: 120px; left: -3px; width: 3px; height: 26px; }
+    /* Volume Up */
+    .btn-vol-up { top: 170px; left: -3px; width: 3px; height: 50px; }
+    /* Volume Down */
+    .btn-vol-down { top: 235px; left: -3px; width: 3px; height: 50px; }
+    /* Power Button */
+    .btn-power { top: 200px; right: -3px; width: 3px; height: 75px; }
+
+    /* The Notch / Dynamic Island */
+    .dynamic-island {
+      position: absolute;
+      top: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 120px;
+      height: 30px;
+      background-color: #000;
+      border-radius: 20px;
+      z-index: 10;
+    }
+
+    /* Screen / Iframe */
+    .screen {
+      width: 100%;
+      height: 100%;
+      background-color: #fff;
+      border-radius: 36px; /* Matches inner curve */
+      overflow: hidden;
+      position: relative;
+    }
+
+    iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+      display: block;
+      /* Ensure no scaling issues within the iframe */
+      background-color: #FAFAFA;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="device-frame">
+    <!-- Hardware Buttons -->
+    <div class="button btn-silence"></div>
+    <div class="button btn-vol-up"></div>
+    <div class="button btn-vol-down"></div>
+    <div class="button btn-power"></div>
+
+    <!-- Screen Content -->
+    <div class="screen">
+      <!-- Simulated camera cutout/notch -->
+      <div class="dynamic-island"></div>
+      
+      <!-- 
+        REPLACE 'src' WITH YOUR DEPLOYED WEB APP URL. 
+        Example: src="https://my-pg-app.vercel.app" 
+      -->
+      <iframe src="http://localhost:8081" title="PG Manager App"></iframe>
+    </div>
+  </div>
+
+</body>
+</html>
