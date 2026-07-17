@@ -1,67 +1,104 @@
-import React, { useMemo } from 'react';
-import { FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useMemo, useState } from 'react';
+import { ActivityIndicator, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { Bed, Pencil, Plus, Trash2, Users } from 'lucide-react-native';
 import Animated, { FadeInDown, Layout } from 'react-native-reanimated';
 
 import EmptyState from '../components/EmptyState';
 import ScreenHeader from '../components/ScreenHeader';
 import { confirm, notify } from '../lib/confirm';
-import { activeOccupants, occupancyOf, roomStatusOf } from '../lib/rent';
+import { formatINR, roomTypeLabel } from '../lib/format';
+import { ApiError, guestsApi, roomsApi } from '../lib/api';
 import { useStore } from '../store/useStore';
 import { theme } from '../theme/theme';
 
 export default function RoomsScreen({ navigation }) {
-  const rooms = useStore((s) => s.rooms);
-  const guests = useStore((s) => s.guests);
-  const deleteRoom = useStore((s) => s.deleteRoom);
+  const currentPropertyId = useStore((s) => s.currentPropertyId);
+
+  const [rooms, setRooms] = useState([]);
+  const [guests, setGuests] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const load = useCallback(async () => {
+    if (!currentPropertyId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const [roomList, guestList] = await Promise.all([
+        roomsApi.list(currentPropertyId),
+        guestsApi.list(currentPropertyId, { active: true }),
+      ]);
+      setRooms(roomList);
+      setGuests(guestList);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not load rooms.');
+    } finally {
+      setLoading(false);
+    }
+  }, [currentPropertyId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
 
   const sortedRooms = useMemo(
     () =>
       [...rooms].sort((a, b) =>
-        String(a.roomNumber).localeCompare(String(b.roomNumber), undefined, { numeric: true })
+        String(a.room_number).localeCompare(String(b.room_number), undefined, { numeric: true })
       ),
     [rooms]
   );
 
-  const handleDelete = (room) => {
-    const occupied = occupancyOf(room, guests);
-    if (occupied > 0) {
-      notify(
-        'Room is occupied',
-        `Room ${room.roomNumber} still has ${occupied} active guest${occupied > 1 ? 's' : ''}. Move them out or to another room first.`
-      );
-      return;
+  const occupantsByRoom = useMemo(() => {
+    const map = new Map();
+    for (const g of guests) {
+      if (!map.has(g.room_id)) map.set(g.room_id, []);
+      map.get(g.room_id).push(g);
     }
+    return map;
+  }, [guests]);
+
+  const handleDelete = (room) => {
     confirm({
       title: 'Delete room?',
-      message: `Room ${room.roomNumber} will be removed permanently.`,
+      message: `Room ${room.room_number} will be removed permanently.`,
       confirmLabel: 'Delete',
       destructive: true,
-      onConfirm: () => {
-        const res = deleteRoom(room.id);
-        if (!res.ok) notify('Could not delete', res.error);
+      onConfirm: async () => {
+        try {
+          await roomsApi.remove(currentPropertyId, room.id);
+          setRooms((rs) => rs.filter((r) => r.id !== room.id));
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 409) {
+            notify('Room is occupied', `Room ${room.room_number} still has guests. Move them out or to another room first.`);
+          } else {
+            notify('Could not delete', err.message);
+          }
+        }
       },
     });
   };
 
   const renderRoom = ({ item, index }) => {
-    const occupants = activeOccupants(item, guests);
-    const status = roomStatusOf(item, guests);
-    const isFull = status === 'Full';
+    const occupants = occupantsByRoom.get(item.id) || [];
+    const isFull = item.status === 'Full';
     return (
-      <Animated.View 
+      <Animated.View
         entering={FadeInDown.delay(index * 50).springify()}
         layout={Layout.springify()}
-        style={styles.roomCard} 
-        testID={`room-card-${item.roomNumber}`}
+        style={styles.roomCard}
+        testID={`room-card-${item.room_number}`}
       >
         <View style={styles.roomHeader}>
           <View style={styles.roomTitleRow}>
-            <Text style={styles.roomNumber}>Room {item.roomNumber}</Text>
+            <Text style={styles.roomNumber}>Room {item.room_number}</Text>
             <View style={[styles.badge, isFull ? styles.badgeFull : styles.badgeAvailable]}>
               <Text style={[styles.badgeText, isFull ? styles.badgeTextFull : styles.badgeTextAvailable]}>
-                {status}
+                {item.status}
               </Text>
             </View>
           </View>
@@ -70,8 +107,8 @@ export default function RoomsScreen({ navigation }) {
               style={styles.iconButton}
               onPress={() => navigation.navigate('RoomForm', { roomId: item.id })}
               accessibilityRole="button"
-              accessibilityLabel={`Edit room ${item.roomNumber}`}
-              testID={`edit-room-${item.roomNumber}`}
+              accessibilityLabel={`Edit room ${item.room_number}`}
+              testID={`edit-room-${item.room_number}`}
             >
               <Pencil color={theme.colors.text} size={16} strokeWidth={2.2} />
             </TouchableOpacity>
@@ -79,8 +116,8 @@ export default function RoomsScreen({ navigation }) {
               style={styles.iconButtonError}
               onPress={() => handleDelete(item)}
               accessibilityRole="button"
-              accessibilityLabel={`Delete room ${item.roomNumber}`}
-              testID={`delete-room-${item.roomNumber}`}
+              accessibilityLabel={`Delete room ${item.room_number}`}
+              testID={`delete-room-${item.room_number}`}
             >
               <Trash2 color={theme.colors.error} size={16} strokeWidth={2.2} />
             </TouchableOpacity>
@@ -89,15 +126,15 @@ export default function RoomsScreen({ navigation }) {
 
         <View style={styles.roomFooter}>
           <View style={styles.roomDetailsCol}>
-            <Text style={styles.detailText}>{item.type} • {item.isAc ? 'AC' : 'Non-AC'}</Text>
-            {!!item.advanceDetails && (
-              <Text style={styles.advanceText}>Advance: {item.advanceDetails}</Text>
+            <Text style={styles.detailText}>{roomTypeLabel(item)} • {item.is_ac ? 'AC' : 'Non-AC'}</Text>
+            {item.advance_details != null && (
+              <Text style={styles.advanceText}>Advance: {formatINR(item.advance_details)}</Text>
             )}
           </View>
           <View style={styles.occupancyContainer}>
             <Users color={theme.colors.textSecondary} size={16} />
             <Text style={styles.occupancyText}>
-              {occupants.length}/{item.capacity}
+              {item.occupied_beds}/{item.capacity}
             </Text>
           </View>
         </View>
@@ -112,7 +149,7 @@ export default function RoomsScreen({ navigation }) {
                 activeOpacity={0.7}
               >
                 <Text style={styles.occupantName} numberOfLines={1}>
-                  {g.fullName}
+                  {g.full_name}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -140,28 +177,37 @@ export default function RoomsScreen({ navigation }) {
         }
       />
 
-      <FlatList
-        data={sortedRooms}
-        keyExtractor={(item) => item.id}
-        renderItem={renderRoom}
-        contentContainerStyle={styles.listContainer}
-        ListEmptyComponent={
-          <EmptyState
-            icon={Bed}
-            title="No rooms yet"
-            message="Add the rooms in your property. Guests are assigned to rooms and beds are tracked automatically."
-            actionLabel="Add room"
-            onAction={() => navigation.navigate('RoomForm')}
-          />
-        }
-        showsVerticalScrollIndicator={false}
-      />
+      {loading && rooms.length === 0 ? (
+        <ActivityIndicator style={styles.loading} color={theme.colors.primary} />
+      ) : (
+        <FlatList
+          data={sortedRooms}
+          keyExtractor={(item) => item.id}
+          renderItem={renderRoom}
+          contentContainerStyle={styles.listContainer}
+          ListEmptyComponent={
+            error ? (
+              <EmptyState icon={Bed} title="Couldn't load rooms" message={error} actionLabel="Retry" onAction={load} />
+            ) : (
+              <EmptyState
+                icon={Bed}
+                title="No rooms yet"
+                message="Add the rooms in your property. Guests are assigned to rooms and beds are tracked automatically."
+                actionLabel="Add room"
+                onAction={() => navigation.navigate('RoomForm')}
+              />
+            )
+          }
+          showsVerticalScrollIndicator={false}
+        />
+      )}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: theme.colors.background },
+  loading: { marginTop: theme.spacing.xxl },
   addButton: {
     backgroundColor: theme.colors.primary,
     width: 48,

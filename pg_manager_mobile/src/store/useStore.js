@@ -1,305 +1,128 @@
-import { useEffect, useState } from 'react';
+// Session/auth state only. Rooms, guests and payments used to live here as
+// a local zustand-persisted database — that's gone. The backend is now the
+// database; screens fetch what they need directly from the api* modules
+// (see src/lib/api.js) with useState/useEffect, refetching on focus via
+// @react-navigation's useFocusEffect. This store just tracks who's logged
+// in and which property is selected, both of which many unrelated screens
+// need at once (tab bar, headers, every list screen).
+
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { bedsFreeOf, monthKeyOf, occupancyOf } from '../lib/rent';
+import {
+  authApi,
+  propertiesApi,
+  loadStoredTokens,
+  hasStoredSession,
+  setOnSessionExpired,
+} from '../lib/api';
 
-const makeId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-
-const norm = (roomNumber) => String(roomNumber || '').trim().toLowerCase();
-
-const initialData = {
-  onboarded: false,
-  pgDetails: { pgName: '', ownerName: '' },
-  guests: [],
-  rooms: [],
-  payments: [],
+const initialSessionState = {
+  user: null,
+  properties: [],
+  currentPropertyId: null,
 };
 
-// Every mutating action validates its invariants and returns { ok, error? } so
-// screens can pre-validate for inline UX while the store stays the last line
-// of defense. Room occupancy/status are derived (src/lib/rent.js), not stored.
-export const useStore = create(
-  persist(
-    (set, get) => ({
-      ...initialData,
+export const useStore = create((set, get) => ({
+  ...initialSessionState,
+  // False until the first bootstrap() (app launch) has resolved — the root
+  // navigator stays on the splash screen until this flips, same role the
+  // old useHydrated() AsyncStorage-hydration flag used to play.
+  authChecked: false,
+  authLoading: false,
+  authError: null,
 
-      completeOnboarding: ({ pgName, ownerName }) => {
-        const name = String(pgName || '').trim();
-        const owner = String(ownerName || '').trim();
-        if (!name || !owner) return { ok: false, error: 'Please fill in both fields.' };
-        set({ onboarded: true, pgDetails: { pgName: name, ownerName: owner } });
-        return { ok: true };
-      },
-
-      updatePgDetails: ({ pgName, ownerName }) => {
-        const name = String(pgName || '').trim();
-        const owner = String(ownerName || '').trim();
-        if (!name || !owner) return { ok: false, error: 'Please fill in both fields.' };
-        set({ pgDetails: { pgName: name, ownerName: owner } });
-        return { ok: true };
-      },
-
-      addRoom: ({ roomNumber, type, capacity, isAc, advanceDetails }) => {
-        const number = String(roomNumber || '').trim();
-        const roomType = String(type || '').trim();
-        const cap = Number(capacity);
-        const ac = Boolean(isAc);
-        const advance = String(advanceDetails || '').trim();
-        if (!number) return { ok: false, error: 'Room number is required.' };
-        if (!roomType) return { ok: false, error: 'Room type is required.' };
-        if (!Number.isInteger(cap) || cap < 1 || cap > 20) {
-          return { ok: false, error: 'Capacity must be a whole number between 1 and 20.' };
-        }
-        if (get().rooms.some((r) => norm(r.roomNumber) === norm(number))) {
-          return { ok: false, error: `Room ${number} already exists.` };
-        }
-        set((state) => ({
-          rooms: [...state.rooms, { id: makeId(), roomNumber: number, type: roomType, capacity: cap, isAc: ac, advanceDetails: advance }],
-        }));
-        return { ok: true };
-      },
-
-      updateRoom: (id, { roomNumber, type, capacity, isAc, advanceDetails }) => {
-        const state = get();
-        const room = state.rooms.find((r) => r.id === id);
-        if (!room) return { ok: false, error: 'Room not found.' };
-
-        const number = String(roomNumber || '').trim();
-        const roomType = String(type || '').trim();
-        const cap = Number(capacity);
-        const ac = Boolean(isAc);
-        const advance = String(advanceDetails || '').trim();
-        if (!number) return { ok: false, error: 'Room number is required.' };
-        if (!roomType) return { ok: false, error: 'Room type is required.' };
-        if (!Number.isInteger(cap) || cap < 1 || cap > 20) {
-          return { ok: false, error: 'Capacity must be a whole number between 1 and 20.' };
-        }
-        if (state.rooms.some((r) => r.id !== id && norm(r.roomNumber) === norm(number))) {
-          return { ok: false, error: `Room ${number} already exists.` };
-        }
-        const occupied = occupancyOf(room, state.guests);
-        if (cap < occupied) {
-          return { ok: false, error: `Capacity can't be below current occupancy (${occupied}).` };
-        }
-        set((s) => ({
-          rooms: s.rooms.map((r) => (r.id === id ? { ...r, roomNumber: number, type: roomType, capacity: cap, isAc: ac, advanceDetails: advance } : r)),
-          // Renaming a room carries its guests (and their payment history labels) along.
-          guests:
-            room.roomNumber === number
-              ? s.guests
-              : s.guests.map((g) => (g.roomNumber === room.roomNumber ? { ...g, roomNumber: number } : g)),
-        }));
-        return { ok: true };
-      },
-
-      deleteRoom: (id) => {
-        const state = get();
-        const room = state.rooms.find((r) => r.id === id);
-        if (!room) return { ok: false, error: 'Room not found.' };
-        const occupied = occupancyOf(room, state.guests);
-        if (occupied > 0) {
-          return { ok: false, error: `Room ${room.roomNumber} still has ${occupied} guest${occupied > 1 ? 's' : ''}. Move them out first.` };
-        }
-        set((s) => ({ rooms: s.rooms.filter((r) => r.id !== id) }));
-        return { ok: true };
-      },
-
-      addGuest: ({ fullName, phone, roomNumber, monthlyRent, aadharNumber, permanentAddress, profilePicture, guestType, stayDuration, stayUnit, advancePaid, food, foodType }) => {
-        const state = get();
-        const name = String(fullName || '').trim();
-        const phoneNumber = String(phone || '').trim();
-        const rent = Number(monthlyRent);
-        
-        const aadhar = String(aadharNumber || '').trim();
-        const address = String(permanentAddress || '').trim();
-        const picture = String(profilePicture || '').trim();
-        const gType = String(guestType || 'permanent').trim();
-        const duration = Number(stayDuration);
-        const unit = String(stayUnit || 'months').trim();
-        const advance = advancePaid != null && advancePaid !== '' ? Number(advancePaid) : null;
-        const hasFood = Boolean(food);
-        const typeFood = String(foodType || '').trim();
-
-        if (!name) return { ok: false, error: 'Full name is required.' };
-        if (!/^[+\d][\d\s-]{6,15}$/.test(phoneNumber)) {
-          return { ok: false, error: 'Enter a valid phone number.' };
-        }
-        if (!Number.isFinite(rent) || rent < 0) {
-          return { ok: false, error: 'Monthly rent must be a positive amount or zero.' };
-        }
-        const room = state.rooms.find((r) => norm(r.roomNumber) === norm(roomNumber));
-        if (!room) return { ok: false, error: 'Select a room.' };
-        if (bedsFreeOf(room, state.guests) === 0) {
-          return { ok: false, error: `Room ${room.roomNumber} is full.` };
-        }
-        set((s) => ({
-          guests: [
-            ...s.guests,
-            {
-              id: makeId(),
-              fullName: name,
-              phone: phoneNumber,
-              roomNumber: room.roomNumber,
-              monthlyRent: rent,
-              aadharNumber: aadhar,
-              permanentAddress: address,
-              profilePicture: picture,
-              guestType: gType,
-              stayDuration: isNaN(duration) ? null : duration,
-              stayUnit: unit,
-              advancePaid: advance,
-              food: hasFood,
-              foodType: typeFood,
-              active: true,
-              joinedAt: new Date().toISOString(),
-              movedOutAt: null,
-            },
-          ],
-        }));
-        return { ok: true };
-      },
-
-      updateGuest: (id, { fullName, phone, roomNumber, monthlyRent, aadharNumber, permanentAddress, profilePicture, guestType, stayDuration, stayUnit, advancePaid, food, foodType }) => {
-        const state = get();
-        const guest = state.guests.find((g) => g.id === id);
-        if (!guest) return { ok: false, error: 'Guest not found.' };
-
-        const name = String(fullName || '').trim();
-        const phoneNumber = String(phone || '').trim();
-        const rent = Number(monthlyRent);
-        
-        const aadhar = String(aadharNumber || '').trim();
-        const address = String(permanentAddress || '').trim();
-        const picture = String(profilePicture || '').trim();
-        const gType = String(guestType || 'permanent').trim();
-        const duration = Number(stayDuration);
-        const unit = String(stayUnit || 'months').trim();
-        const advance = advancePaid != null && advancePaid !== '' ? Number(advancePaid) : null;
-        const hasFood = Boolean(food);
-        const typeFood = String(foodType || '').trim();
-
-        if (!name) return { ok: false, error: 'Full name is required.' };
-        if (!/^[+\d][\d\s-]{6,15}$/.test(phoneNumber)) {
-          return { ok: false, error: 'Enter a valid phone number.' };
-        }
-        if (!Number.isFinite(rent) || rent < 0) {
-          return { ok: false, error: 'Monthly rent must be a positive amount or zero.' };
-        }
-        const room = state.rooms.find((r) => norm(r.roomNumber) === norm(roomNumber));
-        if (!room) return { ok: false, error: 'Select a room.' };
-        const movingRooms = room.roomNumber !== guest.roomNumber;
-        if (guest.active && movingRooms && bedsFreeOf(room, state.guests) === 0) {
-          return { ok: false, error: `Room ${room.roomNumber} is full.` };
-        }
-        set((s) => ({
-          guests: s.guests.map((g) =>
-            g.id === id
-              ? { 
-                  ...g, 
-                  fullName: name, 
-                  phone: phoneNumber, 
-                  roomNumber: room.roomNumber, 
-                  monthlyRent: rent,
-                  aadharNumber: aadhar,
-                  permanentAddress: address,
-                  profilePicture: picture,
-                  guestType: gType,
-                  stayDuration: isNaN(duration) ? null : duration,
-                  stayUnit: unit,
-                  advancePaid: advance,
-                  food: hasFood,
-                  foodType: typeFood
-                }
-              : g
-          ),
-        }));
-        return { ok: true };
-      },
-
-      setGuestActive: (id, active) => {
-        const state = get();
-        const guest = state.guests.find((g) => g.id === id);
-        if (!guest) return { ok: false, error: 'Guest not found.' };
-        if (guest.active === active) return { ok: true };
-        if (active) {
-          const room = state.rooms.find((r) => r.roomNumber === guest.roomNumber);
-          if (!room) return { ok: false, error: `Room ${guest.roomNumber} no longer exists. Edit the guest's room first.` };
-          if (bedsFreeOf(room, state.guests) === 0) {
-            return { ok: false, error: `Room ${room.roomNumber} is full. Edit the guest's room first.` };
-          }
-        }
-        set((s) => ({
-          guests: s.guests.map((g) =>
-            g.id === id ? { ...g, active, movedOutAt: active ? null : new Date().toISOString() } : g
-          ),
-        }));
-        return { ok: true };
-      },
-
-      deleteGuest: (id) => {
-        if (!get().guests.some((g) => g.id === id)) return { ok: false, error: 'Guest not found.' };
-        // Payments snapshot guestName at record time, so the ledger stays intact.
-        set((s) => ({ guests: s.guests.filter((g) => g.id !== id) }));
-        return { ok: true };
-      },
-
-      addPayment: ({ guestId, amount, method, forMonth }) => {
-        const state = get();
-        const guest = state.guests.find((g) => g.id === guestId);
-        if (!guest) return { ok: false, error: 'Select a guest.' };
-        const value = Number(amount);
-        if (!Number.isFinite(value) || value <= 0) {
-          return { ok: false, error: 'Amount must be a positive number.' };
-        }
-        const payMethod = String(method || '').trim();
-        if (!payMethod) return { ok: false, error: 'Select a payment method.' };
-        const month = /^\d{4}-\d{2}$/.test(forMonth) ? forMonth : monthKeyOf();
-        set((s) => ({
-          payments: [
-            {
-              id: makeId(),
-              guestId,
-              guestName: guest.fullName,
-              roomNumber: guest.roomNumber,
-              amount: value,
-              method: payMethod,
-              forMonth: month,
-              date: new Date().toISOString(),
-            },
-            ...s.payments,
-          ],
-        }));
-        return { ok: true };
-      },
-
-      deletePayment: (id) => {
-        if (!get().payments.some((p) => p.id === id)) return { ok: false, error: 'Payment not found.' };
-        set((s) => ({ payments: s.payments.filter((p) => p.id !== id) }));
-        return { ok: true };
-      },
-
-      eraseAllData: () => {
-        set({ ...initialData });
-        return { ok: true };
-      },
-    }),
-    {
-      name: 'pg-manager-storage',
-      version: 1,
-      storage: createJSONStorage(() => AsyncStorage),
+  // Called once from App.js on mount. Loads any stored tokens and, if a
+  // session exists, verifies it against the server and loads properties.
+  bootstrap: async () => {
+    await loadStoredTokens();
+    if (!hasStoredSession()) {
+      set({ authChecked: true });
+      return;
     }
-  )
-);
+    try {
+      const [user, properties] = await Promise.all([authApi.me(), propertiesApi.list()]);
+      set({ user, properties, currentPropertyId: properties[0]?.id ?? null, authChecked: true });
+    } catch {
+      // Access token invalid and refresh failed (api.js already cleared
+      // storage in that case) — fall back to logged-out.
+      set({ ...initialSessionState, authChecked: true });
+    }
+  },
 
-// True once persisted state has been loaded from AsyncStorage.
-export function useHydrated() {
-  const [hydrated, setHydrated] = useState(() => useStore.persist.hasHydrated());
-  useEffect(() => {
-    const unsubFinish = useStore.persist.onFinishHydration(() => setHydrated(true));
-    setHydrated(useStore.persist.hasHydrated());
-    return unsubFinish;
-  }, []);
-  return hydrated;
-}
+  login: async (email, password) => {
+    set({ authLoading: true, authError: null });
+    try {
+      await authApi.login(email, password);
+      const [user, properties] = await Promise.all([authApi.me(), propertiesApi.list()]);
+      set({ user, properties, currentPropertyId: properties[0]?.id ?? null, authLoading: false });
+      return { ok: true };
+    } catch (err) {
+      set({ authLoading: false, authError: err.message });
+      return { ok: false, error: err.message };
+    }
+  },
+
+  register: async (email, password, fullName) => {
+    set({ authLoading: true, authError: null });
+    try {
+      await authApi.register(email, password, fullName);
+      // Registration doesn't return tokens — log in right after.
+      return await get().login(email, password);
+    } catch (err) {
+      set({ authLoading: false, authError: err.message });
+      return { ok: false, error: err.message };
+    }
+  },
+
+  logout: async () => {
+    await authApi.logout();
+    set({ ...initialSessionState, authChecked: true, authError: null });
+  },
+
+  createProperty: async (payload) => {
+    try {
+      const property = await propertiesApi.create(payload);
+      set((s) => ({ properties: [...s.properties, property], currentPropertyId: property.id }));
+      return { ok: true, property };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  },
+
+  updateCurrentProperty: async (payload) => {
+    const propertyId = get().currentPropertyId;
+    if (!propertyId) return { ok: false, error: 'No property selected.' };
+    try {
+      const updated = await propertiesApi.update(propertyId, payload);
+      set((s) => ({ properties: s.properties.map((p) => (p.id === updated.id ? updated : p)) }));
+      return { ok: true, property: updated };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  },
+
+  selectProperty: (id) => set({ currentPropertyId: id }),
+
+  refreshProperties: async () => {
+    try {
+      const properties = await propertiesApi.list();
+      set((s) => ({
+        properties,
+        currentPropertyId: properties.some((p) => p.id === s.currentPropertyId)
+          ? s.currentPropertyId
+          : properties[0]?.id ?? null,
+      }));
+    } catch {
+      // Best-effort refresh — leave existing state as-is on failure.
+    }
+  },
+}));
+
+// api.js calls this when a refresh-token attempt fails (session truly
+// expired/revoked), so the UI drops back to the login screen instead of
+// silently failing every subsequent request. api.js can't import the store
+// directly (it would create a circular import), so this is a one-way
+// registration instead.
+setOnSessionExpired(() => {
+  useStore.setState({ ...initialSessionState, authChecked: true });
+});

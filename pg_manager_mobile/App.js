@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -16,17 +16,19 @@ import {
 
 import ConfirmDialog from './src/components/ConfirmDialog';
 import ErrorBoundary from './src/components/ErrorBoundary';
+import CreatePropertyScreen from './src/screens/CreatePropertyScreen';
 import DashboardScreen from './src/screens/DashboardScreen';
 import GuestDetailScreen from './src/screens/GuestDetailScreen';
 import GuestFormModal from './src/screens/GuestFormModal';
 import GuestsScreen from './src/screens/GuestsScreen';
-import OnboardingScreen from './src/screens/OnboardingScreen';
+import LoginScreen from './src/screens/LoginScreen';
 import PaymentsScreen from './src/screens/PaymentsScreen';
 import RecordPaymentModal from './src/screens/RecordPaymentModal';
+import RegisterScreen from './src/screens/RegisterScreen';
 import RoomFormModal from './src/screens/RoomFormModal';
 import RoomsScreen from './src/screens/RoomsScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
-import { useHydrated, useStore } from './src/store/useStore';
+import { useStore } from './src/store/useStore';
 import { theme } from './src/theme/theme';
 
 const Tab = createBottomTabNavigator();
@@ -88,11 +90,17 @@ export default function App() {
     PlusJakartaSans_600SemiBold,
     PlusJakartaSans_700Bold,
   });
-  const hydrated = useHydrated();
-  const onboarded = useStore((s) => s.onboarded);
+  const authChecked = useStore((s) => s.authChecked);
+  const user = useStore((s) => s.user);
+  const properties = useStore((s) => s.properties);
+  const bootstrap = useStore((s) => s.bootstrap);
+
+  useEffect(() => {
+    bootstrap();
+  }, [bootstrap]);
 
   // If fonts fail to load we still start — text falls back to system fonts.
-  const ready = (fontsLoaded || !!fontError) && hydrated;
+  const ready = (fontsLoaded || !!fontError) && authChecked;
 
   const onLayoutRootView = useCallback(() => {
     if (ready) SplashScreen.hideAsync().catch(() => {});
@@ -106,8 +114,13 @@ export default function App() {
         <StatusBar style="dark" />
         <NavigationContainer>
           <Stack.Navigator screenOptions={{ headerShown: false }}>
-            {!onboarded ? (
-              <Stack.Screen name="Onboarding" component={OnboardingScreen} />
+            {!user ? (
+              <>
+                <Stack.Screen name="Login" component={LoginScreen} />
+                <Stack.Screen name="Register" component={RegisterScreen} />
+              </>
+            ) : properties.length === 0 ? (
+              <Stack.Screen name="CreateProperty" component={CreatePropertyScreen} />
             ) : (
               <>
                 <Stack.Screen name="Main" component={MainTabs} />

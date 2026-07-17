@@ -1,14 +1,13 @@
-import React, { useMemo, useState } from 'react';
-import { StyleSheet, Text, View, Image, TouchableOpacity, TextInput, Alert, Modal, Pressable } from 'react-native';
-import { BedDouble, Camera, ImageIcon, X } from 'lucide-react-native';
-import * as ImagePicker from 'expo-image-picker';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, StyleSheet, Text, TextInput, View } from 'react-native';
+import { BedDouble } from 'lucide-react-native';
 
 import Chip from '../components/Chip';
 import EmptyState from '../components/EmptyState';
 import FormField from '../components/FormField';
 import ModalShell from '../components/ModalShell';
 import PrimaryButton from '../components/PrimaryButton';
-import { bedsFreeOf } from '../lib/rent';
+import { ApiError, guestsApi, roomsApi } from '../lib/api';
 import { useStore } from '../store/useStore';
 import { theme } from '../theme/theme';
 
@@ -16,112 +15,143 @@ const PHONE_RE = /^[+\d][\d\s-]{6,15}$/;
 
 export default function GuestFormModal({ navigation, route }) {
   const guestId = route.params?.guestId;
-  const guests = useStore((s) => s.guests);
-  const rooms = useStore((s) => s.rooms);
-  const addGuest = useStore((s) => s.addGuest);
-  const updateGuest = useStore((s) => s.updateGuest);
+  const currentPropertyId = useStore((s) => s.currentPropertyId);
 
-  const editingGuest = guestId ? guests.find((g) => g.id === guestId) : null;
+  const [rooms, setRooms] = useState([]);
+  const [editingGuest, setEditingGuest] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
 
-  const [fullName, setFullName] = useState(editingGuest?.fullName ?? '');
-  const [phone, setPhone] = useState(editingGuest?.phone ?? '');
-  const [roomNumber, setRoomNumber] = useState(editingGuest?.roomNumber ?? null);
-  const [monthlyRent, setMonthlyRent] = useState(
-    editingGuest ? String(editingGuest.monthlyRent) : ''
-  );
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [roomList, guest] = await Promise.all([
+          roomsApi.list(currentPropertyId),
+          guestId ? guestsApi.get(currentPropertyId, guestId) : Promise.resolve(null),
+        ]);
+        if (cancelled) return;
+        setRooms(roomList);
+        setEditingGuest(guest);
+      } catch (err) {
+        if (!cancelled) setLoadError(err instanceof ApiError ? err.message : 'Could not load form data.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [currentPropertyId, guestId]);
 
-  const [aadharNumber, setAadharNumber] = useState(editingGuest?.aadharNumber ?? '');
-  const [permanentAddress, setPermanentAddress] = useState(editingGuest?.permanentAddress ?? '');
-  const [profilePicture, setProfilePicture] = useState(editingGuest?.profilePicture ?? '');
-  const [guestType, setGuestType] = useState(editingGuest?.guestType ?? 'permanent');
-
-  // Stay duration is universal — available for both permanent and temporary guests
-  const [stayDuration, setStayDuration] = useState(
-    editingGuest?.stayDuration ? String(editingGuest.stayDuration) : ''
-  );
-  const [stayUnit, setStayUnit] = useState(editingGuest?.stayUnit ?? 'months'); // 'days' | 'months' | 'years'
-
-  const [advancePaid, setAdvancePaid] = useState(
-    editingGuest?.advancePaid != null ? String(editingGuest.advancePaid) : ''
-  );
-
-  const [food, setFood] = useState(editingGuest?.food ?? false);
-  const [foodType, setFoodType] = useState(editingGuest?.foodType ?? 'veg');
+  const [fullName, setFullName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [roomId, setRoomId] = useState(null);
+  const [monthlyRent, setMonthlyRent] = useState('');
+  const [aadharNumber, setAadharNumber] = useState('');
+  const [permanentAddress, setPermanentAddress] = useState('');
+  const [guestType, setGuestType] = useState('permanent');
+  const [stayDuration, setStayDuration] = useState('');
+  const [stayUnit, setStayUnit] = useState('months');
+  const [advancePaid, setAdvancePaid] = useState('');
+  const [food, setFood] = useState(false);
+  const [foodType, setFoodType] = useState('veg');
 
   const [errors, setErrors] = useState({});
   const [formError, setFormError] = useState(null);
-  const [showPhotoMenu, setShowPhotoMenu] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  // ── Camera ──────────────────────────────────────────────
-  const openCamera = async () => {
-    setShowPhotoMenu(false);
-    const permission = await ImagePicker.requestCameraPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert('Permission needed', 'Allow camera access to take a photo.');
-      return;
-    }
-    const result = await ImagePicker.launchCameraAsync({
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.6,
-    });
-    if (!result.canceled) setProfilePicture(result.assets[0].uri);
-  };
-
-  // ── Gallery ─────────────────────────────────────────────
-  const openGallery = async () => {
-    setShowPhotoMenu(false);
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.5,
-    });
-    if (!result.canceled) setProfilePicture(result.assets[0].uri);
-  };
+  useEffect(() => {
+    if (!editingGuest) return;
+    setFullName(editingGuest.full_name);
+    setPhone(editingGuest.phone);
+    setRoomId(editingGuest.room_id);
+    setMonthlyRent(String(editingGuest.monthly_rent));
+    setPermanentAddress(editingGuest.permanent_address || '');
+    setGuestType(editingGuest.guest_type);
+    setStayDuration(editingGuest.stay_duration ? String(editingGuest.stay_duration) : '');
+    setStayUnit(editingGuest.stay_unit || 'months');
+    setAdvancePaid(editingGuest.advance_paid != null ? String(editingGuest.advance_paid) : '');
+    setFood(!!editingGuest.has_food);
+    setFoodType(editingGuest.food_type || 'veg');
+    // aadhar_number is write-only server-side (only aadhar_last4 comes back)
+    // — leave the field blank on edit so we don't overwrite it with "".
+  }, [editingGuest]);
 
   const sortedRooms = useMemo(
     () =>
       [...rooms].sort((a, b) =>
-        String(a.roomNumber).localeCompare(String(b.roomNumber), undefined, { numeric: true })
+        String(a.room_number).localeCompare(String(b.room_number), undefined, { numeric: true })
       ),
     [rooms]
   );
 
+  const freeBedsOf = (room) => {
+    const isCurrent = editingGuest?.room_id === room.id;
+    const free = room.capacity - room.occupied_beds + (isCurrent ? 1 : 0);
+    return Math.max(0, free);
+  };
+
   const clearError = (key) => setErrors((e) => (e[key] ? { ...e, [key]: null } : e));
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const next = {};
     if (!fullName.trim()) next.fullName = 'Full name is required.';
     if (!PHONE_RE.test(phone.trim())) next.phone = 'Enter a valid phone number.';
     const rent = Number(monthlyRent);
     if (!Number.isFinite(rent) || rent < 0) next.monthlyRent = 'Enter a valid amount.';
-    if (!roomNumber) next.room = 'Select a room.';
+    if (!roomId) next.room = 'Select a room.';
+    if (advancePaid.trim() && (!Number.isFinite(Number(advancePaid)) || Number(advancePaid) < 0)) {
+      next.advancePaid = 'Enter a valid amount.';
+    }
     setErrors(next);
     if (Object.values(next).some(Boolean)) return;
 
-    const payload = {
-      fullName,
-      phone,
-      roomNumber,
-      monthlyRent: rent,
-      aadharNumber,
-      permanentAddress,
-      profilePicture,
-      guestType,
-      stayDuration: stayDuration ? Number(stayDuration) : null,
-      stayUnit,
-      advancePaid: advancePaid !== '' ? Number(advancePaid) : null,
-      food,
-      foodType: food ? foodType : null,
+    const basePayload = {
+      room_id: roomId,
+      full_name: fullName.trim(),
+      phone: phone.trim(),
+      monthly_rent: rent,
+      guest_type: guestType,
+      advance_paid: advancePaid.trim() ? Number(advancePaid) : null,
+      has_food: food,
+      food_type: food ? foodType : null,
+      stay_duration: stayDuration ? Number(stayDuration) : null,
+      stay_unit: stayDuration ? stayUnit : null,
+      aadhar_number: aadharNumber.trim() || null,
+      permanent_address: permanentAddress.trim() || null,
     };
-    const res = editingGuest ? updateGuest(editingGuest.id, payload) : addGuest(payload);
-    if (!res.ok) {
-      setFormError(res.error);
-      return;
+
+    setSaving(true);
+    setFormError(null);
+    try {
+      if (editingGuest) {
+        // GuestUpdateRequest has no joined_at field — join date can't be
+        // changed after creation.
+        await guestsApi.update(currentPropertyId, editingGuest.id, basePayload);
+      } else {
+        await guestsApi.create(currentPropertyId, {
+          ...basePayload,
+          joined_at: new Date().toISOString().slice(0, 10),
+        });
+      }
+      navigation.goBack();
+    } catch (err) {
+      setFormError(err instanceof ApiError ? err.message : 'Could not save guest.');
+    } finally {
+      setSaving(false);
     }
-    navigation.goBack();
   };
+
+  if (loading) {
+    return (
+      <ModalShell title={guestId ? 'Edit guest' : 'Add guest'}>
+        <ActivityIndicator color={theme.colors.primary} />
+      </ModalShell>
+    );
+  }
+
+  if (loadError) {
+    return <ModalShell title={guestId ? 'Edit guest' : 'Add guest'} error={loadError} />;
+  }
 
   if (rooms.length === 0) {
     return (
@@ -143,44 +173,13 @@ export default function GuestFormModal({ navigation, route }) {
       error={formError}
       footer={
         <PrimaryButton
-          title={editingGuest ? 'Save changes' : 'Save guest'}
+          title={saving ? 'Saving…' : editingGuest ? 'Save changes' : 'Save guest'}
           onPress={handleSave}
+          disabled={saving}
           testID="guest-form-save"
         />
       }
     >
-
-      {/* ── Profile Picture ────────────────────────────── */}
-      <View style={styles.imagePickerGroup}>
-        <Text style={styles.label}>Profile Picture</Text>
-        <View style={styles.imageRow}>
-          <TouchableOpacity
-            style={styles.imagePickerBtn}
-            onPress={() => setShowPhotoMenu(true)}
-            testID="profile-picture-btn"
-          >
-            {profilePicture ? (
-              <Image source={{ uri: profilePicture }} style={styles.profileImage} />
-            ) : (
-              <View style={styles.imagePlaceholder}>
-                <Camera color={theme.colors.textSecondary} size={28} />
-                <Text style={styles.imagePlaceholderText}>Add Photo</Text>
-              </View>
-            )}
-          </TouchableOpacity>
-          {!!profilePicture && (
-            <TouchableOpacity
-              style={styles.removePhotoBtn}
-              onPress={() => setProfilePicture('')}
-            >
-              <X color={theme.colors.error} size={16} />
-              <Text style={styles.removePhotoText}>Remove</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      </View>
-
-      {/* ── Basic Info ────────────────────────────────── */}
       <FormField
         label="Full name"
         value={fullName}
@@ -201,26 +200,21 @@ export default function GuestFormModal({ navigation, route }) {
         testID="guest-phone-input"
       />
 
-      {/* ── Room ─────────────────────────────────────── */}
       <View style={styles.roomGroup}>
         <Text style={styles.label}>Room</Text>
         <View style={styles.roomChips}>
           {sortedRooms.map((room) => {
-            const isCurrent = editingGuest?.roomNumber === room.roomNumber;
-            const free = bedsFreeOf(room, guests);
+            const isCurrent = editingGuest?.room_id === room.id;
+            const free = freeBedsOf(room);
             const disabled = free === 0 && !isCurrent;
             return (
               <Chip
                 key={room.id}
-                label={
-                  isCurrent
-                    ? `${room.roomNumber} · current`
-                    : `${room.roomNumber} · ${free} free`
-                }
-                selected={roomNumber === room.roomNumber}
+                label={isCurrent ? `${room.room_number} · current` : `${room.room_number} · ${free} free`}
+                selected={roomId === room.id}
                 disabled={disabled}
-                onPress={() => { setRoomNumber(room.roomNumber); clearError('room'); }}
-                testID={`room-chip-${room.roomNumber}`}
+                onPress={() => { setRoomId(room.id); clearError('room'); }}
+                testID={`room-chip-${room.room_number}`}
               />
             );
           })}
@@ -241,22 +235,22 @@ export default function GuestFormModal({ navigation, route }) {
       <FormField
         label="Advance paid (₹)"
         value={advancePaid}
-        onChangeText={setAdvancePaid}
+        onChangeText={(v) => { setAdvancePaid(v); clearError('advancePaid'); }}
         keyboardType="numeric"
         placeholder="e.g. 5000"
+        error={errors.advancePaid}
         testID="guest-advance-input"
       />
 
       <FormField
-        label="Aadhar Number"
+        label={editingGuest ? 'Aadhar Number (leave blank to keep unchanged)' : 'Aadhar Number'}
         value={aadharNumber}
         onChangeText={setAadharNumber}
-        placeholder="e.g. 1234 5678 9012"
+        placeholder={editingGuest ? `On file: •••• ${editingGuest.aadhar_last4 ?? '----'}` : 'e.g. 1234 5678 9012'}
         testID="guest-aadhar-input"
         keyboardType="numeric"
       />
 
-      {/* ── Address — larger multiline box ───────────── */}
       <View style={styles.addressGroup}>
         <Text style={styles.label}>Permanent Address</Text>
         <TextInput
@@ -274,20 +268,18 @@ export default function GuestFormModal({ navigation, route }) {
         />
       </View>
 
-      {/* ── Guest Type ───────────────────────────────── */}
       <View style={styles.roomGroup}>
         <Text style={styles.label}>Guest Type</Text>
         <View style={styles.roomChips}>
           <Chip label="Permanent" selected={guestType === 'permanent'} onPress={() => setGuestType('permanent')} />
-          <Chip label="Temporary" selected={guestType === 'temp'} onPress={() => setGuestType('temp')} />
+          <Chip label="Temporary" selected={guestType === 'temporary'} onPress={() => setGuestType('temporary')} />
         </View>
       </View>
 
-      {/* ── Stay Duration — available for BOTH types ─── */}
       <View style={styles.stayRow}>
         <View style={styles.stayInputWrap}>
           <Text style={styles.label}>
-            {guestType === 'temp' ? 'Expected stay' : 'Stay duration'}
+            {guestType === 'temporary' ? 'Expected stay' : 'Stay duration'}
           </Text>
           <TextInput
             style={styles.stayInput}
@@ -309,7 +301,6 @@ export default function GuestFormModal({ navigation, route }) {
         </View>
       </View>
 
-      {/* ── Food ─────────────────────────────────────── */}
       <View style={styles.roomGroup}>
         <Text style={styles.label}>Food Details</Text>
         <View style={styles.roomChips}>
@@ -323,54 +314,10 @@ export default function GuestFormModal({ navigation, route }) {
           <Text style={styles.label}>Food Type</Text>
           <View style={styles.roomChips}>
             <Chip label="Vegetarian" selected={foodType === 'veg'} onPress={() => setFoodType('veg')} />
-            <Chip label="Non-Vegetarian" selected={foodType === 'non-veg'} onPress={() => setFoodType('non-veg')} />
+            <Chip label="Non-Vegetarian" selected={foodType === 'non_veg'} onPress={() => setFoodType('non_veg')} />
           </View>
         </View>
       )}
-
-      {/* ── Photo Picker Bottom Sheet ─────────────────── */}
-      <Modal
-        visible={showPhotoMenu}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowPhotoMenu(false)}
-      >
-        <Pressable style={styles.overlay} onPress={() => setShowPhotoMenu(false)}>
-          <View style={styles.photoSheet}>
-            <Text style={styles.photoSheetTitle}>Add Profile Photo</Text>
-
-            <TouchableOpacity style={styles.photoOption} onPress={openCamera}>
-              <View style={styles.photoIconWrap}>
-                <Camera color={theme.colors.primary} size={22} />
-              </View>
-              <View>
-                <Text style={styles.photoOptionText}>Take Photo</Text>
-                <Text style={styles.photoOptionSub}>Open camera</Text>
-              </View>
-            </TouchableOpacity>
-
-            <View style={styles.photoDivider} />
-
-            <TouchableOpacity style={styles.photoOption} onPress={openGallery}>
-              <View style={styles.photoIconWrap}>
-                <ImageIcon color={theme.colors.primary} size={22} />
-              </View>
-              <View>
-                <Text style={styles.photoOptionText}>Choose from Gallery</Text>
-                <Text style={styles.photoOptionSub}>Pick an existing photo</Text>
-              </View>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.photoCancelBtn}
-              onPress={() => setShowPhotoMenu(false)}
-            >
-              <Text style={styles.photoCancelText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </Pressable>
-      </Modal>
-
     </ModalShell>
   );
 }
@@ -385,36 +332,6 @@ const styles = StyleSheet.create({
   roomChips: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing.sm },
   chipError: { ...theme.typography.caption, color: theme.colors.error, marginTop: 6 },
 
-  // ── Profile picture
-  imagePickerGroup: { marginBottom: theme.spacing.lg },
-  imageRow: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.md },
-  imagePickerBtn: {
-    width: 100,
-    height: 100,
-    borderRadius: theme.borderRadius.lg,
-    backgroundColor: theme.colors.surface,
-    borderWidth: 1.5,
-    borderColor: theme.colors.border,
-    borderStyle: 'dashed',
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  profileImage: { width: '100%', height: '100%' },
-  imagePlaceholder: { alignItems: 'center', justifyContent: 'center', gap: 6 },
-  imagePlaceholderText: { ...theme.typography.caption, color: theme.colors.textSecondary },
-  removePhotoBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.error + '12',
-  },
-  removePhotoText: { ...theme.typography.caption, color: theme.colors.error },
-
-  // ── Address
   addressGroup: { marginBottom: theme.spacing.lg },
   addressInput: {
     backgroundColor: theme.colors.surface,
@@ -429,7 +346,6 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
 
-  // ── Stay duration
   stayRow: {
     flexDirection: 'row',
     gap: theme.spacing.md,
@@ -447,63 +363,4 @@ const styles = StyleSheet.create({
   },
   stayUnitWrap: { flex: 1.3 },
   unitChips: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing.sm },
-
-  // ── Photo picker modal
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
-  },
-  photoSheet: {
-    backgroundColor: theme.colors.background,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingHorizontal: theme.spacing.lg,
-    paddingTop: theme.spacing.lg,
-    paddingBottom: 40,
-    gap: 4,
-  },
-  photoSheetTitle: {
-    ...theme.typography.h3,
-    textAlign: 'center',
-    marginBottom: theme.spacing.md,
-  },
-  photoOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.md,
-    paddingVertical: 14,
-  },
-  photoIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.primary + '15',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  photoOptionText: {
-    ...theme.typography.body,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-  },
-  photoOptionSub: {
-    ...theme.typography.caption,
-    marginTop: 1,
-  },
-  photoDivider: {
-    height: 1,
-    backgroundColor: theme.colors.border,
-  },
-  photoCancelBtn: {
-    marginTop: theme.spacing.sm,
-    alignItems: 'center',
-    paddingVertical: 14,
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.borderRadius.md,
-  },
-  photoCancelText: {
-    ...theme.typography.body,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: theme.colors.textSecondary,
-  },
 });

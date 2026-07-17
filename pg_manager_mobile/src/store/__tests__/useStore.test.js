@@ -1,230 +1,182 @@
-import { useStore } from '../useStore';
+// The store used to be a local, persisted rooms/guests/payments database
+// and these tests drove its CRUD validation directly. Now it only tracks
+// auth/session/property-selection state and delegates everything else to
+// the backend via src/lib/api.js — so these tests mock that module and
+// verify the store's orchestration (what it calls, what it sets) rather
+// than any business-rule validation, which now lives server-side.
 
-const reset = () =>
-  useStore.setState({
-    onboarded: false,
-    pgDetails: { pgName: '', ownerName: '' },
-    guests: [],
-    rooms: [],
-    payments: [],
-  });
+jest.mock('../../lib/api', () => ({
+  authApi: {
+    me: jest.fn(),
+    login: jest.fn(),
+    register: jest.fn(),
+    logout: jest.fn(),
+  },
+  propertiesApi: {
+    list: jest.fn(),
+    create: jest.fn(),
+    update: jest.fn(),
+  },
+  loadStoredTokens: jest.fn(),
+  hasStoredSession: jest.fn(),
+  setOnSessionExpired: jest.fn(),
+}));
+
+import { useStore } from '../useStore';
+import { authApi, hasStoredSession, loadStoredTokens, propertiesApi } from '../../lib/api';
 
 const S = () => useStore.getState();
 
-const addRoom = (roomNumber = '101', capacity = 2, type = '2 Sharing') =>
-  S().addRoom({ roomNumber, type, capacity });
+const user = { id: 'u1', email: 'kai@example.com', full_name: 'Kai' };
+const property = { id: 'p1', name: 'Sunrise PG' };
 
-const addGuest = (overrides = {}) =>
-  S().addGuest({
-    fullName: 'Rahul Sharma',
-    phone: '+91 9876543210',
-    roomNumber: '101',
-    monthlyRent: 8500,
-    ...overrides,
-  });
-
-beforeEach(reset);
-
-describe('onboarding', () => {
-  it('rejects blank fields', () => {
-    expect(S().completeOnboarding({ pgName: '  ', ownerName: 'A' }).ok).toBe(false);
-    expect(S().onboarded).toBe(false);
-  });
-
-  it('trims and saves details', () => {
-    const res = S().completeOnboarding({ pgName: '  Sunrise PG ', ownerName: ' Kowshek ' });
-    expect(res.ok).toBe(true);
-    expect(S().onboarded).toBe(true);
-    expect(S().pgDetails).toEqual({ pgName: 'Sunrise PG', ownerName: 'Kowshek' });
+beforeEach(() => {
+  jest.clearAllMocks();
+  useStore.setState({
+    user: null,
+    properties: [],
+    currentPropertyId: null,
+    authChecked: false,
+    authLoading: false,
+    authError: null,
   });
 });
 
-describe('rooms', () => {
-  it('adds a room with trimmed fields', () => {
-    expect(addRoom(' 101 ').ok).toBe(true);
-    expect(S().rooms[0].roomNumber).toBe('101');
+describe('bootstrap', () => {
+  it('marks authChecked without a session when no token is stored', async () => {
+    loadStoredTokens.mockResolvedValue({ accessToken: null, refreshToken: null });
+    hasStoredSession.mockReturnValue(false);
+
+    await S().bootstrap();
+
+    expect(S().authChecked).toBe(true);
+    expect(S().user).toBeNull();
+    expect(authApi.me).not.toHaveBeenCalled();
   });
 
-  it('rejects duplicates case-insensitively', () => {
-    addRoom('101A');
-    const res = addRoom(' 101a ');
-    expect(res.ok).toBe(false);
-    expect(res.error).toMatch(/already exists/);
-    expect(S().rooms).toHaveLength(1);
+  it('loads the user and their properties when a session exists', async () => {
+    loadStoredTokens.mockResolvedValue({ accessToken: 'a', refreshToken: 'r' });
+    hasStoredSession.mockReturnValue(true);
+    authApi.me.mockResolvedValue(user);
+    propertiesApi.list.mockResolvedValue([property]);
+
+    await S().bootstrap();
+
+    expect(S().authChecked).toBe(true);
+    expect(S().user).toEqual(user);
+    expect(S().properties).toEqual([property]);
+    expect(S().currentPropertyId).toBe('p1');
   });
 
-  it('rejects invalid capacity', () => {
-    expect(addRoom('101', 0).ok).toBe(false);
-    expect(addRoom('101', 2.5).ok).toBe(false);
-    expect(addRoom('101', 21).ok).toBe(false);
-    expect(addRoom('101', 'abc').ok).toBe(false);
-  });
+  it('falls back to logged-out if the stored session is no longer valid', async () => {
+    loadStoredTokens.mockResolvedValue({ accessToken: 'stale', refreshToken: 'stale' });
+    hasStoredSession.mockReturnValue(true);
+    authApi.me.mockRejectedValue(new Error('401'));
 
-  it('renaming a room carries its guests along', () => {
-    addRoom('101');
-    addGuest();
-    const roomId = S().rooms[0].id;
-    const res = S().updateRoom(roomId, { roomNumber: '201', type: '2 Sharing', capacity: 2 });
-    expect(res.ok).toBe(true);
-    expect(S().guests[0].roomNumber).toBe('201');
-  });
+    await S().bootstrap();
 
-  it('rejects capacity below current occupancy', () => {
-    addRoom('101', 2);
-    addGuest();
-    addGuest({ fullName: 'Aman Gupta', phone: '9876543211' });
-    const res = S().updateRoom(S().rooms[0].id, { roomNumber: '101', type: '2 Sharing', capacity: 1 });
-    expect(res.ok).toBe(false);
-    expect(res.error).toMatch(/occupancy/);
-  });
-
-  it('blocks deleting an occupied room but allows once guests moved out', () => {
-    addRoom('101');
-    addGuest();
-    const roomId = S().rooms[0].id;
-    expect(S().deleteRoom(roomId).ok).toBe(false);
-
-    S().setGuestActive(S().guests[0].id, false);
-    expect(S().deleteRoom(roomId).ok).toBe(true);
-    expect(S().rooms).toHaveLength(0);
+    expect(S().authChecked).toBe(true);
+    expect(S().user).toBeNull();
+    expect(S().properties).toEqual([]);
   });
 });
 
-describe('guests', () => {
-  beforeEach(() => addRoom('101', 2));
+describe('login', () => {
+  it('on success, loads the user and their properties', async () => {
+    authApi.login.mockResolvedValue({ access_token: 'a', refresh_token: 'r' });
+    authApi.me.mockResolvedValue(user);
+    propertiesApi.list.mockResolvedValue([property]);
 
-  it('adds a guest into a room with free beds', () => {
-    const res = addGuest();
+    const res = await S().login('kai@example.com', 'password123');
+
     expect(res.ok).toBe(true);
-    const g = S().guests[0];
-    expect(g.active).toBe(true);
-    expect(g.movedOutAt).toBeNull();
-    expect(g.joinedAt).toBeTruthy();
+    expect(S().user).toEqual(user);
+    expect(S().currentPropertyId).toBe('p1');
+    expect(S().authLoading).toBe(false);
   });
 
-  it('validates phone and rent', () => {
-    expect(addGuest({ phone: 'abc' }).ok).toBe(false);
-    expect(addGuest({ monthlyRent: 0 }).ok).toBe(false);
-    expect(addGuest({ monthlyRent: -5 }).ok).toBe(false);
-    expect(addGuest({ monthlyRent: 'x' }).ok).toBe(false);
-  });
+  it('on failure, surfaces the error and leaves the session logged out', async () => {
+    authApi.login.mockRejectedValue(new Error('Invalid email or password'));
 
-  it('rejects a full room', () => {
-    addGuest();
-    addGuest({ fullName: 'Aman Gupta', phone: '9876543211' });
-    const res = addGuest({ fullName: 'Third Person', phone: '9876543212' });
+    const res = await S().login('kai@example.com', 'wrong');
+
     expect(res.ok).toBe(false);
-    expect(res.error).toMatch(/full/i);
-  });
-
-  it('rejects unknown rooms', () => {
-    expect(addGuest({ roomNumber: '999' }).ok).toBe(false);
-  });
-
-  it('editing a guest without changing rooms never hits the bed check', () => {
-    addRoom('102', 1);
-    addGuest({ roomNumber: '102' });
-    const g = S().guests[0];
-    const res = S().updateGuest(g.id, { ...g, monthlyRent: 9999 });
-    expect(res.ok).toBe(true);
-    expect(S().guests[0].monthlyRent).toBe(9999);
-  });
-
-  it('rejects moving a guest into a full room', () => {
-    addRoom('102', 1);
-    addGuest({ roomNumber: '102' });
-    addGuest({ fullName: 'Aman Gupta', phone: '9876543211', roomNumber: '101' });
-    const aman = S().guests[1];
-    const res = S().updateGuest(aman.id, { ...aman, roomNumber: '102' });
-    expect(res.ok).toBe(false);
-  });
-
-  it('move-out frees the bed; reactivation requires a free bed', () => {
-    addRoom('102', 1);
-    addGuest({ roomNumber: '102' });
-    const first = S().guests[0];
-
-    expect(S().setGuestActive(first.id, false).ok).toBe(true);
-    expect(S().guests[0].movedOutAt).toBeTruthy();
-
-    // bed is free now, someone else moves in
-    addGuest({ fullName: 'Aman Gupta', phone: '9876543211', roomNumber: '102' });
-
-    // reactivating the first guest must fail — room is full again
-    const res = S().setGuestActive(first.id, true);
-    expect(res.ok).toBe(false);
-    expect(res.error).toMatch(/full/i);
-  });
-
-  it('reactivation fails if the room was deleted meanwhile', () => {
-    addGuest();
-    const g = S().guests[0];
-    S().setGuestActive(g.id, false);
-    S().deleteRoom(S().rooms[0].id);
-    expect(S().setGuestActive(g.id, true).ok).toBe(false);
-  });
-
-  it('deleting a guest keeps the payment ledger intact', () => {
-    addGuest();
-    const g = S().guests[0];
-    S().addPayment({ guestId: g.id, amount: 8500, method: 'UPI', forMonth: '2026-07' });
-    S().deleteGuest(g.id);
-    expect(S().guests).toHaveLength(0);
-    expect(S().payments).toHaveLength(1);
-    expect(S().payments[0].guestName).toBe('Rahul Sharma');
-    expect(S().payments[0].roomNumber).toBe('101');
+    expect(res.error).toBe('Invalid email or password');
+    expect(S().user).toBeNull();
+    expect(S().authError).toBe('Invalid email or password');
   });
 });
 
-describe('payments', () => {
-  beforeEach(() => {
-    addRoom('101', 2);
-    addGuest();
-  });
+describe('register', () => {
+  it('registers then chains into login', async () => {
+    authApi.register.mockResolvedValue(user);
+    authApi.login.mockResolvedValue({ access_token: 'a', refresh_token: 'r' });
+    authApi.me.mockResolvedValue(user);
+    propertiesApi.list.mockResolvedValue([]);
 
-  it('records a payment with snapshot and month attribution', () => {
-    const g = S().guests[0];
-    const res = S().addPayment({ guestId: g.id, amount: 8500, method: 'UPI', forMonth: '2026-07' });
+    const res = await S().register('kai@example.com', 'password123', 'Kai');
+
+    expect(authApi.register).toHaveBeenCalledWith('kai@example.com', 'password123', 'Kai');
+    expect(authApi.login).toHaveBeenCalledWith('kai@example.com', 'password123');
     expect(res.ok).toBe(true);
-    const p = S().payments[0];
-    expect(p.guestName).toBe('Rahul Sharma');
-    expect(p.forMonth).toBe('2026-07');
-    expect(p.date).toBeTruthy();
+    expect(S().user).toEqual(user);
   });
 
-  it('falls back to the current month when forMonth is malformed', () => {
-    const g = S().guests[0];
-    S().addPayment({ guestId: g.id, amount: 100, method: 'Cash', forMonth: 'garbage' });
-    expect(S().payments[0].forMonth).toMatch(/^\d{4}-\d{2}$/);
-  });
+  it('does not attempt login if registration itself fails', async () => {
+    authApi.register.mockRejectedValue(new Error('Email already registered'));
 
-  it('validates guest, amount and method', () => {
-    const g = S().guests[0];
-    expect(S().addPayment({ guestId: 'nope', amount: 100, method: 'UPI' }).ok).toBe(false);
-    expect(S().addPayment({ guestId: g.id, amount: 0, method: 'UPI' }).ok).toBe(false);
-    expect(S().addPayment({ guestId: g.id, amount: -5, method: 'UPI' }).ok).toBe(false);
-    expect(S().addPayment({ guestId: g.id, amount: 'x', method: 'UPI' }).ok).toBe(false);
-    expect(S().addPayment({ guestId: g.id, amount: 100, method: '  ' }).ok).toBe(false);
-  });
+    const res = await S().register('kai@example.com', 'password123', 'Kai');
 
-  it('deletes payments', () => {
-    const g = S().guests[0];
-    S().addPayment({ guestId: g.id, amount: 100, method: 'UPI' });
-    const id = S().payments[0].id;
-    expect(S().deletePayment(id).ok).toBe(true);
-    expect(S().payments).toHaveLength(0);
+    expect(res.ok).toBe(false);
+    expect(authApi.login).not.toHaveBeenCalled();
   });
 });
 
-describe('eraseAllData', () => {
-  it('resets everything including onboarding', () => {
-    S().completeOnboarding({ pgName: 'X', ownerName: 'Y' });
-    addRoom();
-    addGuest();
-    S().eraseAllData();
-    expect(S().onboarded).toBe(false);
-    expect(S().guests).toEqual([]);
-    expect(S().rooms).toEqual([]);
-    expect(S().payments).toEqual([]);
+describe('logout', () => {
+  it('clears session state', async () => {
+    useStore.setState({ user, properties: [property], currentPropertyId: 'p1', authChecked: true });
+    authApi.logout.mockResolvedValue(undefined);
+
+    await S().logout();
+
+    expect(S().user).toBeNull();
+    expect(S().properties).toEqual([]);
+    expect(S().currentPropertyId).toBeNull();
+    expect(S().authChecked).toBe(true);
+  });
+});
+
+describe('properties', () => {
+  it('createProperty adds the new property and selects it', async () => {
+    propertiesApi.create.mockResolvedValue(property);
+
+    const res = await S().createProperty({ name: 'Sunrise PG' });
+
+    expect(res.ok).toBe(true);
+    expect(S().properties).toEqual([property]);
+    expect(S().currentPropertyId).toBe('p1');
+  });
+
+  it('updateCurrentProperty patches the matching property in place', async () => {
+    useStore.setState({ properties: [property], currentPropertyId: 'p1' });
+    const updated = { ...property, name: 'New Name' };
+    propertiesApi.update.mockResolvedValue(updated);
+
+    const res = await S().updateCurrentProperty({ name: 'New Name' });
+
+    expect(res.ok).toBe(true);
+    expect(S().properties[0].name).toBe('New Name');
+  });
+
+  it('updateCurrentProperty fails gracefully with no property selected', async () => {
+    const res = await S().updateCurrentProperty({ name: 'X' });
+    expect(res.ok).toBe(false);
+    expect(propertiesApi.update).not.toHaveBeenCalled();
+  });
+
+  it('selectProperty switches the active property', () => {
+    useStore.setState({ properties: [property, { id: 'p2', name: 'Other PG' }], currentPropertyId: 'p1' });
+    S().selectProperty('p2');
+    expect(S().currentPropertyId).toBe('p2');
   });
 });

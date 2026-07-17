@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from 'react';
-import { FlatList, StyleSheet, Text, TextInput, TouchableOpacity, View, Image } from 'react-native';
+import React, { useCallback, useMemo, useState } from 'react';
+import { ActivityIndicator, FlatList, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { Phone, Plus, Search, UserPlus } from 'lucide-react-native';
 import Animated, { FadeInDown, Layout } from 'react-native-reanimated';
 
@@ -9,7 +10,8 @@ import EmptyState from '../components/EmptyState';
 import ScreenHeader from '../components/ScreenHeader';
 import { formatINR, initialsOf } from '../lib/format';
 import { callPhone } from '../lib/phone';
-import { balanceForMonth, monthKeyOf } from '../lib/rent';
+import { monthKeyOf } from '../lib/rent';
+import { ApiError, guestsApi, roomsApi, statsApi } from '../lib/api';
 import { useStore } from '../store/useStore';
 import { theme } from '../theme/theme';
 
@@ -22,12 +24,49 @@ const FILTERS = [
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 
 export default function GuestsScreen({ navigation }) {
-  const guests = useStore((s) => s.guests);
-  const payments = useStore((s) => s.payments);
+  const currentPropertyId = useStore((s) => s.currentPropertyId);
+
+  const [guests, setGuests] = useState([]);
+  const [rooms, setRooms] = useState([]);
+  const [dueByGuestId, setDueByGuestId] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('all');
 
-  const currentMonth = monthKeyOf();
+  const load = useCallback(async () => {
+    if (!currentPropertyId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const [guestList, roomList, stats] = await Promise.all([
+        guestsApi.list(currentPropertyId),
+        roomsApi.list(currentPropertyId),
+        statsApi.dashboard(currentPropertyId, monthKeyOf()),
+      ]);
+      setGuests(guestList);
+      setRooms(roomList);
+      const dueMap = {};
+      for (const entry of stats.due_guests) dueMap[entry.guest_id] = entry.balance;
+      setDueByGuestId(dueMap);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not load guests.');
+    } finally {
+      setLoading(false);
+    }
+  }, [currentPropertyId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
+
+  const roomNumberById = useMemo(() => {
+    const map = new Map();
+    for (const r of rooms) map.set(r.id, r.room_number);
+    return map;
+  }, [rooms]);
 
   const visibleGuests = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -36,17 +75,19 @@ export default function GuestsScreen({ navigation }) {
         if (filter === 'active' && !g.active) return false;
         if (filter === 'inactive' && g.active) return false;
         if (!q) return true;
+        const roomNumber = String(roomNumberById.get(g.room_id) ?? '');
         return (
-          g.fullName.toLowerCase().includes(q) ||
-          String(g.roomNumber).toLowerCase().includes(q) ||
+          g.full_name.toLowerCase().includes(q) ||
+          roomNumber.toLowerCase().includes(q) ||
           String(g.phone).toLowerCase().includes(q)
         );
       })
-      .sort((a, b) => a.fullName.localeCompare(b.fullName));
-  }, [guests, query, filter]);
+      .sort((a, b) => a.full_name.localeCompare(b.full_name));
+  }, [guests, query, filter, roomNumberById]);
 
   const renderGuest = ({ item, index }) => {
-    const balance = item.active ? balanceForMonth(item, payments, currentMonth) : 0;
+    const balance = item.active ? dueByGuestId[item.id] ?? 0 : 0;
+    const roomNumber = roomNumberById.get(item.room_id) ?? '—';
     return (
       <AnimatedTouchable
         entering={FadeInDown.delay(index * 50).springify()}
@@ -57,18 +98,14 @@ export default function GuestsScreen({ navigation }) {
         testID={`guest-row-${item.id}`}
       >
         <View style={styles.avatar}>
-          {item.profilePicture ? (
-            <Image source={{ uri: item.profilePicture }} style={styles.profileImage} />
-          ) : (
-            <Text style={styles.avatarText}>{initialsOf(item.fullName)}</Text>
-          )}
+          <Text style={styles.avatarText}>{initialsOf(item.full_name)}</Text>
         </View>
         <View style={styles.details}>
           <Text style={styles.name} numberOfLines={1}>
-            {item.fullName}
+            {item.full_name}
           </Text>
           <Text style={styles.roomInfo}>
-            Room {item.roomNumber} · {formatINR(item.monthlyRent)}/mo
+            Room {roomNumber} · {formatINR(item.monthly_rent)}/mo
           </Text>
         </View>
         <View style={styles.actions}>
@@ -89,7 +126,7 @@ export default function GuestsScreen({ navigation }) {
             style={styles.iconButton}
             onPress={() => callPhone(item.phone)}
             accessibilityRole="button"
-            accessibilityLabel={`Call ${item.fullName}`}
+            accessibilityLabel={`Call ${item.full_name}`}
           >
             <Phone color={theme.colors.primary} size={18} strokeWidth={2.5} />
           </TouchableOpacity>
@@ -98,18 +135,19 @@ export default function GuestsScreen({ navigation }) {
     );
   };
 
-  const emptyState =
-    guests.length === 0 ? (
-      <EmptyState
-        icon={UserPlus}
-        title="No guests yet"
-        message="Add your first guest and their rent will be tracked automatically each month."
-        actionLabel="Add guest"
-        onAction={() => navigation.navigate('GuestForm')}
-      />
-    ) : (
-      <EmptyState icon={Search} title="No matches" message="Try a different search or filter." />
-    );
+  const emptyState = error ? (
+    <EmptyState icon={Search} title="Couldn't load guests" message={error} actionLabel="Retry" onAction={load} />
+  ) : guests.length === 0 ? (
+    <EmptyState
+      icon={UserPlus}
+      title="No guests yet"
+      message="Add your first guest and their rent will be tracked automatically each month."
+      actionLabel="Add guest"
+      onAction={() => navigation.navigate('GuestForm')}
+    />
+  ) : (
+    <EmptyState icon={Search} title="No matches" message="Try a different search or filter." />
+  );
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -154,21 +192,26 @@ export default function GuestsScreen({ navigation }) {
         ))}
       </View>
 
-      <FlatList
-        data={visibleGuests}
-        keyExtractor={(item) => item.id}
-        renderItem={renderGuest}
-        contentContainerStyle={styles.listContainer}
-        ListEmptyComponent={emptyState}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-      />
+      {loading && guests.length === 0 ? (
+        <ActivityIndicator style={styles.loading} color={theme.colors.primary} />
+      ) : (
+        <FlatList
+          data={visibleGuests}
+          keyExtractor={(item) => item.id}
+          renderItem={renderGuest}
+          contentContainerStyle={styles.listContainer}
+          ListEmptyComponent={emptyState}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        />
+      )}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: theme.colors.background },
+  loading: { marginTop: theme.spacing.xxl },
   addButton: {
     backgroundColor: theme.colors.primary,
     width: 48,
@@ -219,7 +262,6 @@ const styles = StyleSheet.create({
     marginRight: theme.spacing.md,
     overflow: 'hidden',
   },
-  profileImage: { width: '100%', height: '100%' },
   avatarText: { ...theme.typography.body, fontFamily: 'PlusJakartaSans_700Bold' },
   details: { flex: 1, marginRight: theme.spacing.sm },
   name: { ...theme.typography.body, fontFamily: 'PlusJakartaSans_600SemiBold', marginBottom: 2 },

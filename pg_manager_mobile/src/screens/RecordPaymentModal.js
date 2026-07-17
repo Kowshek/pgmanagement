@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { UserPlus } from 'lucide-react-native';
 
 import Chip from '../components/Chip';
@@ -8,39 +8,86 @@ import FormField from '../components/FormField';
 import ModalShell from '../components/ModalShell';
 import PrimaryButton from '../components/PrimaryButton';
 import { formatINR, initialsOf } from '../lib/format';
-import { balanceForMonth, monthKeyOf, monthLabel, prevMonthKey } from '../lib/rent';
+import { monthKeyOf, monthKeyToDate, monthLabel, prevMonthKey } from '../lib/rent';
+import { uuidv4 } from '../lib/uuid';
+import { ApiError, guestsApi, paymentsApi, statsApi } from '../lib/api';
 import { useStore } from '../store/useStore';
 import { theme } from '../theme/theme';
 
-const METHODS = ['UPI', 'Cash', 'Bank transfer', 'Card'];
+// Display label -> backend PaymentMethod enum value.
+const METHODS = [
+  { label: 'UPI', value: 'upi' },
+  { label: 'Cash', value: 'cash' },
+  { label: 'Bank transfer', value: 'bank_transfer' },
+  { label: 'Card', value: 'card' },
+];
 
 export default function RecordPaymentModal({ navigation, route }) {
   const preselectedGuestId = route.params?.guestId;
-  const guests = useStore((s) => s.guests);
-  const payments = useStore((s) => s.payments);
-  const addPayment = useStore((s) => s.addPayment);
-
-  const activeGuests = useMemo(
-    () => guests.filter((g) => g.active).sort((a, b) => a.fullName.localeCompare(b.fullName)),
-    [guests]
-  );
+  const currentPropertyId = useStore((s) => s.currentPropertyId);
 
   const currentMonth = monthKeyOf();
   const lastMonth = prevMonthKey(currentMonth);
 
-  const prefillFor = (guest, month) => {
-    if (!guest) return '';
-    const balance = balanceForMonth(guest, payments, month);
-    return balance > 0 ? String(balance) : '';
-  };
+  const [activeGuests, setActiveGuests] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
 
-  const initialGuest = activeGuests.find((g) => g.id === preselectedGuestId) || null;
-  const [selectedGuestId, setSelectedGuestId] = useState(initialGuest?.id ?? null);
   const [forMonth, setForMonth] = useState(currentMonth);
-  const [amount, setAmount] = useState(() => prefillFor(initialGuest, currentMonth));
-  const [method, setMethod] = useState('UPI');
+  const [dueByGuestId, setDueByGuestId] = useState({});
+  const [dueLoading, setDueLoading] = useState(false);
+
+  const [selectedGuestId, setSelectedGuestId] = useState(preselectedGuestId ?? null);
+  const [amount, setAmount] = useState('');
+  const [method, setMethod] = useState('upi');
   const [errors, setErrors] = useState({});
   const [formError, setFormError] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const guests = await guestsApi.list(currentPropertyId, { active: true });
+        if (cancelled) return;
+        setActiveGuests([...guests].sort((a, b) => a.full_name.localeCompare(b.full_name)));
+      } catch (err) {
+        if (!cancelled) setLoadError(err instanceof ApiError ? err.message : 'Could not load guests.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [currentPropertyId]);
+
+  const loadDueForMonth = useCallback(
+    async (month) => {
+      setDueLoading(true);
+      try {
+        const stats = await statsApi.dashboard(currentPropertyId, month);
+        const map = {};
+        for (const entry of stats.due_guests) map[entry.guest_id] = entry.balance;
+        setDueByGuestId(map);
+      } catch {
+        setDueByGuestId({});
+      } finally {
+        setDueLoading(false);
+      }
+    },
+    [currentPropertyId]
+  );
+
+  useEffect(() => {
+    loadDueForMonth(forMonth);
+  }, [forMonth, loadDueForMonth]);
+
+  // Prefill the amount once we know the selected guest's due balance for
+  // the currently chosen month (skipped if the user already typed a value).
+  useEffect(() => {
+    if (!selectedGuestId || dueLoading) return;
+    const due = dueByGuestId[selectedGuestId];
+    if (due > 0) setAmount((prev) => (prev === '' ? String(due) : prev));
+  }, [selectedGuestId, dueByGuestId, dueLoading]);
 
   const selectedGuest = activeGuests.find((g) => g.id === selectedGuestId) || null;
 
@@ -48,16 +95,17 @@ export default function RecordPaymentModal({ navigation, route }) {
 
   const selectGuest = (guest) => {
     setSelectedGuestId(guest.id);
-    setAmount(prefillFor(guest, forMonth));
+    const due = dueByGuestId[guest.id];
+    setAmount(due > 0 ? String(due) : '');
     clearError('guest');
   };
 
   const selectMonth = (month) => {
     setForMonth(month);
-    if (selectedGuest) setAmount(prefillFor(selectedGuest, month));
+    setAmount('');
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const next = {};
     if (!selectedGuest) next.guest = 'Select a guest.';
     const value = Number(amount);
@@ -65,13 +113,35 @@ export default function RecordPaymentModal({ navigation, route }) {
     setErrors(next);
     if (Object.values(next).some(Boolean)) return;
 
-    const res = addPayment({ guestId: selectedGuest.id, amount: value, method, forMonth });
-    if (!res.ok) {
-      setFormError(res.error);
-      return;
+    setSaving(true);
+    setFormError(null);
+    try {
+      await paymentsApi.create(currentPropertyId, {
+        guest_id: selectedGuest.id,
+        amount: value,
+        method,
+        for_month: monthKeyToDate(forMonth),
+        idempotency_key: uuidv4(),
+      });
+      navigation.goBack();
+    } catch (err) {
+      setFormError(err instanceof ApiError ? err.message : 'Could not save payment.');
+    } finally {
+      setSaving(false);
     }
-    navigation.goBack();
   };
+
+  if (loading) {
+    return (
+      <ModalShell title="Record payment">
+        <ActivityIndicator color={theme.colors.primary} />
+      </ModalShell>
+    );
+  }
+
+  if (loadError) {
+    return <ModalShell title="Record payment" error={loadError} />;
+  }
 
   if (activeGuests.length === 0) {
     return (
@@ -87,6 +157,8 @@ export default function RecordPaymentModal({ navigation, route }) {
     );
   }
 
+  const methodLabel = METHODS.find((m) => m.value === method)?.label ?? method;
+
   return (
     <ModalShell
       title="Record payment"
@@ -95,18 +167,22 @@ export default function RecordPaymentModal({ navigation, route }) {
         <>
           {selectedGuest && Number(amount) > 0 && (
             <Text style={styles.summary}>
-              {formatINR(amount)} from {selectedGuest.fullName} · rent for {monthLabel(forMonth)} ·{' '}
-              {method}
+              {formatINR(amount)} from {selectedGuest.full_name} · rent for {monthLabel(forMonth)} · {methodLabel}
             </Text>
           )}
-          <PrimaryButton title="Save payment" onPress={handleSave} testID="payment-save" />
+          <PrimaryButton
+            title={saving ? 'Saving…' : 'Save payment'}
+            onPress={handleSave}
+            disabled={saving}
+            testID="payment-save"
+          />
         </>
       }
     >
       <View style={styles.group}>
         <Text style={styles.label}>Guest</Text>
         {activeGuests.map((guest) => {
-          const balance = balanceForMonth(guest, payments, forMonth);
+          const balance = dueByGuestId[guest.id] ?? 0;
           const selected = guest.id === selectedGuestId;
           return (
             <TouchableOpacity
@@ -122,15 +198,16 @@ export default function RecordPaymentModal({ navigation, route }) {
                 {selected && <View style={styles.radioDot} />}
               </View>
               <View style={styles.guestAvatar}>
-                <Text style={styles.guestAvatarText}>{initialsOf(guest.fullName)}</Text>
+                <Text style={styles.guestAvatarText}>{initialsOf(guest.full_name)}</Text>
               </View>
               <View style={styles.guestInfo}>
                 <Text style={styles.guestName} numberOfLines={1}>
-                  {guest.fullName}
+                  {guest.full_name}
                 </Text>
-                <Text style={styles.guestRoom}>Room {guest.roomNumber}</Text>
               </View>
-              {balance > 0 ? (
+              {dueLoading ? (
+                <ActivityIndicator size="small" color={theme.colors.textTertiary} />
+              ) : balance > 0 ? (
                 <Text style={styles.guestDue}>{formatINR(balance)} due</Text>
               ) : (
                 <Text style={styles.guestPaid}>Paid</Text>
@@ -162,10 +239,7 @@ export default function RecordPaymentModal({ navigation, route }) {
       <FormField
         label="Amount (₹)"
         value={amount}
-        onChangeText={(v) => {
-          setAmount(v);
-          clearError('amount');
-        }}
+        onChangeText={(v) => { setAmount(v); clearError('amount'); }}
         keyboardType="numeric"
         placeholder="e.g. 8500"
         error={errors.amount}
@@ -177,11 +251,11 @@ export default function RecordPaymentModal({ navigation, route }) {
         <View style={styles.chips}>
           {METHODS.map((m) => (
             <Chip
-              key={m}
-              label={m}
-              selected={method === m}
-              onPress={() => setMethod(m)}
-              testID={`method-chip-${m.replace(/\s/g, '-').toLowerCase()}`}
+              key={m.value}
+              label={m.label}
+              selected={method === m.value}
+              onPress={() => setMethod(m.value)}
+              testID={`method-chip-${m.value}`}
             />
           ))}
         </View>
@@ -233,7 +307,6 @@ const styles = StyleSheet.create({
   guestAvatarText: { ...theme.typography.caption, fontFamily: 'PlusJakartaSans_700Bold' },
   guestInfo: { flex: 1 },
   guestName: { ...theme.typography.body, fontFamily: 'PlusJakartaSans_600SemiBold' },
-  guestRoom: { ...theme.typography.caption },
   guestDue: { ...theme.typography.caption, color: theme.colors.error, fontFamily: 'PlusJakartaSans_700Bold' },
   guestPaid: { ...theme.typography.caption, color: theme.colors.success, fontFamily: 'PlusJakartaSans_700Bold' },
   summary: {

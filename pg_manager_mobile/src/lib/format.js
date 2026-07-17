@@ -12,6 +12,20 @@ export function formatINR(amount) {
   return `${sign}₹${rest},${last3}`;
 }
 
+const ROOM_TYPE_LABELS = {
+  single: 'Single',
+  double: '2 Sharing',
+  triple: '3 Sharing',
+  quad: '4 Sharing',
+};
+
+// Room.room_type is a fixed backend enum (single/double/triple/quad/custom);
+// "custom" rooms carry their own free-text label separately.
+export function roomTypeLabel(room) {
+  if (room.room_type === 'custom') return room.custom_type_label || 'Custom';
+  return ROOM_TYPE_LABELS[room.room_type] || room.room_type;
+}
+
 export function initialsOf(name) {
   const parts = String(name || '')
     .trim()

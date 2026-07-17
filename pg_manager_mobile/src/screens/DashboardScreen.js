@@ -1,6 +1,7 @@
-import React, { useMemo } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useState } from 'react';
+import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   Bed,
   Building2,
@@ -14,7 +15,8 @@ import {
 
 import EmptyState from '../components/EmptyState';
 import { formatINR, initialsOf } from '../lib/format';
-import { computeStats, monthKeyOf, monthLabel } from '../lib/rent';
+import { monthKeyOf, monthLabel } from '../lib/rent';
+import { statsApi, ApiError } from '../lib/api';
 import { useStore } from '../store/useStore';
 import { theme } from '../theme/theme';
 
@@ -33,26 +35,54 @@ function StatCard({ title, value, icon: Icon, color }) {
 }
 
 export default function DashboardScreen({ navigation }) {
-  const pgDetails = useStore((s) => s.pgDetails);
-  const guests = useStore((s) => s.guests);
-  const rooms = useStore((s) => s.rooms);
-  const payments = useStore((s) => s.payments);
+  const user = useStore((s) => s.user);
+  const properties = useStore((s) => s.properties);
+  const currentPropertyId = useStore((s) => s.currentPropertyId);
+  const property = properties.find((p) => p.id === currentPropertyId);
+
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   const currentMonth = monthKeyOf();
-  const stats = useMemo(
-    () => computeStats({ guests, rooms, payments }, currentMonth),
-    [guests, rooms, payments, currentMonth]
+
+  const load = useCallback(
+    async ({ silent } = {}) => {
+      if (!currentPropertyId) return;
+      if (!silent) setLoading(true);
+      setError(null);
+      try {
+        const data = await statsApi.dashboard(currentPropertyId, currentMonth);
+        setStats(data);
+      } catch (err) {
+        setError(err instanceof ApiError ? err.message : 'Could not load dashboard.');
+      } finally {
+        setLoading(false);
+      }
+    },
+    [currentPropertyId, currentMonth]
   );
-  const hasData = rooms.length > 0 || guests.length > 0;
+
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
+
+  const hasData = !!stats && (stats.total_rooms > 0 || stats.active_guests > 0);
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.container}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={loading && !!stats} onRefresh={() => load({ silent: true })} />}
+      >
         <View style={styles.header}>
           <View style={styles.headerText}>
-            <Text style={styles.greeting}>Hello, {pgDetails.ownerName}</Text>
+            <Text style={styles.greeting}>Hello, {user?.full_name || ''}</Text>
             <Text style={styles.pgName} numberOfLines={1}>
-              {pgDetails.pgName}
+              {property?.name || ''}
             </Text>
           </View>
           <TouchableOpacity
@@ -66,7 +96,11 @@ export default function DashboardScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
-        {!hasData ? (
+        {loading && !stats ? (
+          <ActivityIndicator style={styles.loading} color={theme.colors.primary} />
+        ) : error && !stats ? (
+          <EmptyState icon={Building2} title="Couldn't load dashboard" message={error} actionLabel="Retry" onAction={load} />
+        ) : !hasData ? (
           <EmptyState
             icon={Building2}
             title="Set up your PG"
@@ -81,25 +115,25 @@ export default function DashboardScreen({ navigation }) {
               <View style={styles.grid}>
                 <StatCard
                   title="Pending rent"
-                  value={formatINR(stats.pendingRent)}
+                  value={formatINR(stats.pending_rent)}
                   icon={IndianRupee}
                   color={theme.colors.error}
                 />
                 <StatCard
                   title="Collected this month"
-                  value={formatINR(stats.collectedThisMonth)}
+                  value={formatINR(stats.collected_this_month)}
                   icon={TrendingUp}
                   color={theme.colors.success}
                 />
                 <StatCard
                   title="Occupancy"
-                  value={`${stats.occupancyRate}%`}
+                  value={`${stats.occupancy_rate}%`}
                   icon={Users}
                   color={theme.colors.blue}
                 />
                 <StatCard
-                  title={stats.totalRooms === 1 ? 'Room' : 'Rooms'}
-                  value={stats.totalRooms}
+                  title={stats.total_rooms === 1 ? 'Room' : 'Rooms'}
+                  value={stats.total_rooms}
                   icon={Bed}
                   color={theme.colors.warning}
                 />
@@ -108,8 +142,8 @@ export default function DashboardScreen({ navigation }) {
 
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Rent due · {monthLabel(currentMonth)}</Text>
-              {stats.dueGuests.length === 0 ? (
-                stats.activeGuests > 0 ? (
+              {stats.due_guests.length === 0 ? (
+                stats.active_guests > 0 ? (
                   <View style={styles.allPaidCard}>
                     <CheckCircle2 color={theme.colors.success} size={22} strokeWidth={2.2} />
                     <Text style={styles.allPaidText}>All rent collected. Nothing pending.</Text>
@@ -121,23 +155,22 @@ export default function DashboardScreen({ navigation }) {
                   </View>
                 )
               ) : (
-                stats.dueGuests.map(({ guest, balance }) => (
+                stats.due_guests.map((entry) => (
                   <TouchableOpacity
-                    key={guest.id}
+                    key={entry.guest_id}
                     style={styles.dueRow}
-                    onPress={() => navigation.navigate('GuestDetail', { guestId: guest.id })}
+                    onPress={() => navigation.navigate('GuestDetail', { guestId: entry.guest_id })}
                     activeOpacity={0.7}
                   >
                     <View style={styles.dueAvatar}>
-                      <Text style={styles.dueAvatarText}>{initialsOf(guest.fullName)}</Text>
+                      <Text style={styles.dueAvatarText}>{initialsOf(entry.guest_name)}</Text>
                     </View>
                     <View style={styles.dueInfo}>
                       <Text style={styles.dueName} numberOfLines={1}>
-                        {guest.fullName}
+                        {entry.guest_name}
                       </Text>
-                      <Text style={styles.dueRoom}>Room {guest.roomNumber}</Text>
                     </View>
-                    <Text style={styles.dueAmount}>{formatINR(balance)}</Text>
+                    <Text style={styles.dueAmount}>{formatINR(entry.balance)}</Text>
                     <ChevronRight color={theme.colors.textTertiary} size={18} />
                   </TouchableOpacity>
                 ))
@@ -174,6 +207,7 @@ export default function DashboardScreen({ navigation }) {
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: theme.colors.background },
   container: { flex: 1, paddingHorizontal: theme.spacing.lg },
+  loading: { marginTop: theme.spacing.xxl },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -263,7 +297,6 @@ const styles = StyleSheet.create({
   dueAvatarText: { ...theme.typography.body, fontFamily: 'PlusJakartaSans_700Bold' },
   dueInfo: { flex: 1 },
   dueName: { ...theme.typography.body, fontFamily: 'PlusJakartaSans_600SemiBold' },
-  dueRoom: { ...theme.typography.caption },
   dueAmount: {
     ...theme.typography.body,
     fontFamily: 'PlusJakartaSans_700Bold',

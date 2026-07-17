@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: pg_manager_api
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount the entire backend root to support hot reload of app, alembic, etc.
+      - ../:/app
+    environment:
+      # These overrides ensure the containers talk to each other if .env is missing/incomplete
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/pgmanager
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET=super_secret_key_change_in_production
+    env_file:
+      - ../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  postgres:
+    image: postgres:16
+    container_name: pg_manager_postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=pgmanager
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d pgmanager"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    container_name: pg_manager_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

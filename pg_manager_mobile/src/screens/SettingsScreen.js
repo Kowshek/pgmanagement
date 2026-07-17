@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Check, LogOut } from 'lucide-react-native';
 
 import BackHeader from '../components/BackHeader';
 import FormField from '../components/FormField';
@@ -12,18 +13,24 @@ import { theme } from '../theme/theme';
 const APP_VERSION = require('../../package.json').version;
 
 export default function SettingsScreen() {
-  const pgDetails = useStore((s) => s.pgDetails);
-  const updatePgDetails = useStore((s) => s.updatePgDetails);
-  const eraseAllData = useStore((s) => s.eraseAllData);
+  const user = useStore((s) => s.user);
+  const properties = useStore((s) => s.properties);
+  const currentPropertyId = useStore((s) => s.currentPropertyId);
+  const updateCurrentProperty = useStore((s) => s.updateCurrentProperty);
+  const selectProperty = useStore((s) => s.selectProperty);
+  const logout = useStore((s) => s.logout);
 
-  const [pgName, setPgName] = useState(pgDetails.pgName);
-  const [ownerName, setOwnerName] = useState(pgDetails.ownerName);
+  const property = properties.find((p) => p.id === currentPropertyId);
+  const [name, setName] = useState(property?.name ?? '');
   const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
 
-  const dirty = pgName !== pgDetails.pgName || ownerName !== pgDetails.ownerName;
+  const dirty = name.trim() !== (property?.name ?? '');
 
-  const handleSave = () => {
-    const res = updatePgDetails({ pgName, ownerName });
+  const handleSave = async () => {
+    setSaving(true);
+    const res = await updateCurrentProperty({ name: name.trim() });
+    setSaving(false);
     if (!res.ok) {
       setError(res.error);
       return;
@@ -32,15 +39,13 @@ export default function SettingsScreen() {
     notify('Saved', 'Property details updated.');
   };
 
-  const handleErase = () => {
+  const handleLogout = () => {
     confirm({
-      title: 'Erase all data?',
-      message:
-        'This permanently deletes every room, guest and payment on this device and cannot be undone.',
-      confirmLabel: 'Erase everything',
+      title: 'Log out?',
+      message: "You'll need to log in again to access your properties.",
+      confirmLabel: 'Log out',
       destructive: true,
-      onConfirm: () => eraseAllData(),
-      // The root navigator returns to onboarding automatically.
+      onConfirm: () => logout(),
     });
   };
 
@@ -49,42 +54,55 @@ export default function SettingsScreen() {
       <BackHeader title="Settings" />
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <Text style={styles.sectionTitle}>Account</Text>
+          <View style={styles.accountCard}>
+            <Text style={styles.accountName}>{user?.full_name}</Text>
+            <Text style={styles.accountEmail}>{user?.email}</Text>
+          </View>
+
           <Text style={styles.sectionTitle}>Property</Text>
           <FormField
-            label="PG name"
-            value={pgName}
-            onChangeText={setPgName}
+            label="Property name"
+            value={name}
+            onChangeText={setName}
             placeholder="e.g. Sunrise PG"
             autoCapitalize="words"
-            testID="settings-pg-name"
-          />
-          <FormField
-            label="Owner name"
-            value={ownerName}
-            onChangeText={setOwnerName}
-            placeholder="e.g. Kowshek"
             error={error}
-            autoCapitalize="words"
-            testID="settings-owner-name"
+            testID="settings-property-name"
           />
-          <PrimaryButton title="Save changes" onPress={handleSave} disabled={!dirty} testID="settings-save" />
+          <PrimaryButton
+            title={saving ? 'Saving…' : 'Save changes'}
+            onPress={handleSave}
+            disabled={!dirty || saving}
+            testID="settings-save"
+          />
 
-          <Text style={[styles.sectionTitle, styles.dangerTitle]}>Danger zone</Text>
-          <View style={styles.dangerCard}>
-            <View style={styles.dangerText}>
-              <Text style={styles.dangerHeading}>Erase all data</Text>
-              <Text style={styles.dangerDescription}>
-                Removes all rooms, guests and payments and restarts setup.
-              </Text>
-            </View>
-            <PrimaryButton
-              title="Erase"
-              variant="danger"
-              onPress={handleErase}
-              style={styles.dangerButton}
-              testID="settings-erase"
-            />
-          </View>
+          {properties.length > 1 && (
+            <>
+              <Text style={styles.sectionTitle}>Switch property</Text>
+              <View style={styles.propertyList}>
+                {properties.map((p) => (
+                  <TouchableOpacity
+                    key={p.id}
+                    style={styles.propertyRow}
+                    onPress={() => {
+                      selectProperty(p.id);
+                      setName(p.name);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.propertyName}>{p.name}</Text>
+                    {p.id === currentPropertyId && <Check color={theme.colors.primary} size={18} strokeWidth={2.5} />}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </>
+          )}
+
+          <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.8} testID="settings-logout">
+            <LogOut color={theme.colors.error} size={18} strokeWidth={2.2} />
+            <Text style={styles.logoutText}>Log out</Text>
+          </TouchableOpacity>
 
           <Text style={styles.version}>PG Manager v{APP_VERSION}</Text>
         </ScrollView>
@@ -97,22 +115,44 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: theme.colors.background },
   flex: { flex: 1 },
   content: { padding: theme.spacing.lg },
-  sectionTitle: { ...theme.typography.h3, marginBottom: theme.spacing.md },
-  dangerTitle: { marginTop: theme.spacing.xl, color: theme.colors.error },
-  dangerCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.md,
+  sectionTitle: { ...theme.typography.h3, marginBottom: theme.spacing.md, marginTop: theme.spacing.lg },
+  accountCard: {
     backgroundColor: theme.colors.surface,
     borderRadius: theme.borderRadius.lg,
     borderWidth: 1,
-    borderColor: theme.colors.error + '30',
+    borderColor: theme.colors.border,
     padding: theme.spacing.md,
   },
-  dangerText: { flex: 1 },
-  dangerHeading: { ...theme.typography.body, fontFamily: 'PlusJakartaSans_600SemiBold', marginBottom: 2 },
-  dangerDescription: { ...theme.typography.caption, lineHeight: 18 },
-  dangerButton: { paddingHorizontal: theme.spacing.lg, paddingVertical: 12 },
+  accountName: { ...theme.typography.body, fontFamily: 'PlusJakartaSans_600SemiBold', marginBottom: 2 },
+  accountEmail: { ...theme.typography.caption },
+  propertyList: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.borderRadius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    overflow: 'hidden',
+  },
+  propertyRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  propertyName: { ...theme.typography.body, fontFamily: 'PlusJakartaSans_600SemiBold' },
+  logoutButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.sm,
+    backgroundColor: theme.colors.error + '10',
+    borderRadius: theme.borderRadius.full,
+    paddingVertical: 14,
+    marginTop: theme.spacing.xl,
+  },
+  logoutText: { ...theme.typography.body, fontFamily: 'PlusJakartaSans_600SemiBold', color: theme.colors.error },
   version: {
     ...theme.typography.small,
     textAlign: 'center',

@@ -6,6 +6,7 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+*.swo
 
 # Claude Code local settings (per-machine, not shared)
 **/.claude/settings.local.json
@@ -15,15 +16,45 @@ Thumbs.db
 .env.*
 !.env.example
 
-# Python (future backend/)
+# Python
 __pycache__/
 *.pyc
+*.pyo
 .venv/
 venv/
 *.egg-info/
+dist/
+build/
+.eggs/
+
+# Pytest
+.pytest_cache/
+pytest_output*.log
+.coverage
+htmlcov/
 
 # Node (fallback; pg_manager_mobile/ has its own more specific .gitignore)
 node_modules/
 
+# Expo / React Native
+.expo/
+web-build/
+expo-env.d.ts
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+.metro-health-check*
+/pg_manager_mobile/ios/
+/pg_manager_mobile/android/
+
+# Docker
+docker-compose.override.yml
+
 # Logs
 *.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*

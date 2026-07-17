@@ -1,66 +1,116 @@
-import React, { useEffect } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View, Image } from 'react-native';
+import React, { useCallback, useState } from 'react';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { format } from 'date-fns';
-import { LogOut, Pencil, Phone, RotateCcw, Trash2 } from 'lucide-react-native';
+import { LogOut, Pencil, Phone, RotateCcw } from 'lucide-react-native';
 
 import BackHeader from '../components/BackHeader';
 import PrimaryButton from '../components/PrimaryButton';
 import { confirm, notify } from '../lib/confirm';
 import { formatINR, initialsOf } from '../lib/format';
 import { callPhone } from '../lib/phone';
-import { monthKeyOf, monthLabel, paidForMonth } from '../lib/rent';
+import { monthKeyOf, monthLabel } from '../lib/rent';
+import { ApiError, guestsApi, paymentsApi, roomsApi } from '../lib/api';
 import { useStore } from '../store/useStore';
 import { theme } from '../theme/theme';
 
 export default function GuestDetailScreen({ navigation, route }) {
   const { guestId } = route.params;
-  const guest = useStore((s) => s.guests.find((g) => g.id === guestId));
-  const payments = useStore((s) => s.payments);
-  const setGuestActive = useStore((s) => s.setGuestActive);
-  const deleteGuest = useStore((s) => s.deleteGuest);
+  const currentPropertyId = useStore((s) => s.currentPropertyId);
 
-  // Guest can disappear (deleted elsewhere); leave the screen gracefully.
-  useEffect(() => {
-    if (!guest) navigation.goBack();
-  }, [guest, navigation]);
+  const [guest, setGuest] = useState(null);
+  const [roomNumber, setRoomNumber] = useState(null);
+  const [payments, setPayments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!currentPropertyId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const g = await guestsApi.get(currentPropertyId, guestId);
+      const [room, guestPayments] = await Promise.all([
+        roomsApi.get(currentPropertyId, g.room_id).catch(() => null),
+        paymentsApi.list(currentPropertyId, { guest_id: guestId }),
+      ]);
+      setGuest(g);
+      setRoomNumber(room?.room_number ?? '—');
+      setPayments(guestPayments.sort((a, b) => new Date(b.paid_at) - new Date(a.paid_at)));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        navigation.goBack();
+        return;
+      }
+      setError(err instanceof ApiError ? err.message : 'Could not load guest.');
+    } finally {
+      setLoading(false);
+    }
+  }, [currentPropertyId, guestId, navigation]);
+
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
+
+  if (loading && !guest) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <BackHeader title="Guest" />
+        <ActivityIndicator style={styles.loading} color={theme.colors.primary} />
+      </SafeAreaView>
+    );
+  }
+
+  if (error && !guest) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <BackHeader title="Guest" />
+        <Text style={styles.errorText}>{error}</Text>
+      </SafeAreaView>
+    );
+  }
+
   if (!guest) return null;
 
   const currentMonth = monthKeyOf();
-  const paid = paidForMonth(payments, guest.id, currentMonth);
-  const balance = Math.max(0, Number(guest.monthlyRent) - paid);
-  const guestPayments = payments
-    .filter((p) => p.guestId === guest.id)
-    .sort((a, b) => new Date(b.date) - new Date(a.date));
+  const paidThisMonth = payments
+    .filter((p) => p.for_month?.startsWith(currentMonth))
+    .reduce((sum, p) => sum + Number(p.amount || 0), 0);
+  const balance = Math.max(0, Number(guest.monthly_rent) - paidThisMonth);
 
   const handleMoveOut = () => {
     confirm({
       title: 'Mark as moved out?',
-      message: `${guest.fullName} will stop being billed and their bed in Room ${guest.roomNumber} becomes free. Their payment history is kept.`,
+      message: `${guest.full_name} will stop being billed and their bed in Room ${roomNumber} becomes free. Their payment history is kept.`,
       confirmLabel: 'Move out',
-      onConfirm: () => {
-        const res = setGuestActive(guest.id, false);
-        if (!res.ok) notify('Could not move out', res.error);
+      onConfirm: async () => {
+        setBusy(true);
+        try {
+          const updated = await guestsApi.moveOut(currentPropertyId, guest.id);
+          setGuest(updated);
+        } catch (err) {
+          notify('Could not move out', err instanceof ApiError ? err.message : 'Something went wrong.');
+        } finally {
+          setBusy(false);
+        }
       },
     });
   };
 
-  const handleReactivate = () => {
-    const res = setGuestActive(guest.id, true);
-    if (!res.ok) notify('Could not reactivate', res.error);
-  };
-
-  const handleDelete = () => {
-    confirm({
-      title: 'Delete guest?',
-      message: `${guest.fullName} will be removed permanently. Their payments stay in the ledger.`,
-      confirmLabel: 'Delete',
-      destructive: true,
-      onConfirm: () => {
-        deleteGuest(guest.id);
-        // navigation.goBack() happens via the effect above once the guest is gone.
-      },
-    });
+  const handleReactivate = async () => {
+    setBusy(true);
+    try {
+      const updated = await guestsApi.reactivate(currentPropertyId, guest.id);
+      setGuest(updated);
+    } catch (err) {
+      notify('Could not reactivate', err instanceof ApiError ? err.message : 'Something went wrong.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -82,13 +132,9 @@ export default function GuestDetailScreen({ navigation, route }) {
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.profileCard}>
           <View style={styles.avatar}>
-            {guest.profilePicture ? (
-              <Image source={{ uri: guest.profilePicture }} style={styles.profileImage} />
-            ) : (
-              <Text style={styles.avatarText}>{initialsOf(guest.fullName)}</Text>
-            )}
+            <Text style={styles.avatarText}>{initialsOf(guest.full_name)}</Text>
           </View>
-          <Text style={styles.name}>{guest.fullName}</Text>
+          <Text style={styles.name}>{guest.full_name}</Text>
           <View style={[styles.statusBadge, guest.active ? styles.badgeActive : styles.badgeMuted]}>
             <Text style={[styles.statusText, guest.active ? styles.statusTextActive : styles.statusTextMuted]}>
               {guest.active ? 'Active' : 'Moved out'}
@@ -98,65 +144,65 @@ export default function GuestDetailScreen({ navigation, route }) {
           <View style={styles.metaGrid}>
             <View style={styles.metaItem}>
               <Text style={styles.metaLabel}>Room</Text>
-              <Text style={styles.metaValue}>{guest.roomNumber}</Text>
+              <Text style={styles.metaValue}>{roomNumber}</Text>
             </View>
             <View style={styles.metaItem}>
               <Text style={styles.metaLabel}>Monthly rent</Text>
-              <Text style={styles.metaValue}>{formatINR(guest.monthlyRent)}</Text>
+              <Text style={styles.metaValue}>{formatINR(guest.monthly_rent)}</Text>
             </View>
             <View style={styles.metaItem}>
               <Text style={styles.metaLabel}>Joined</Text>
               <Text style={styles.metaValue}>
-                {guest.joinedAt ? format(new Date(guest.joinedAt), 'd MMM yyyy') : '—'}
+                {guest.joined_at ? format(new Date(guest.joined_at), 'd MMM yyyy') : '—'}
               </Text>
             </View>
-            {!guest.active && guest.movedOutAt && (
+            {!guest.active && guest.moved_out_at && (
               <View style={styles.metaItem}>
                 <Text style={styles.metaLabel}>Moved out</Text>
-                <Text style={styles.metaValue}>{format(new Date(guest.movedOutAt), 'd MMM yyyy')}</Text>
+                <Text style={styles.metaValue}>{format(new Date(guest.moved_out_at), 'd MMM yyyy')}</Text>
               </View>
             )}
-            {guest.advancePaid != null && (
+            {guest.advance_paid != null && (
               <View style={styles.metaItem}>
                 <Text style={styles.metaLabel}>Advance paid</Text>
-                <Text style={styles.metaValue}>{formatINR(guest.advancePaid)}</Text>
+                <Text style={styles.metaValue}>{formatINR(guest.advance_paid)}</Text>
               </View>
             )}
           </View>
 
           <View style={styles.metaGrid}>
-            {!!guest.aadharNumber && (
+            {!!guest.aadhar_last4 && (
               <View style={styles.metaItem}>
                 <Text style={styles.metaLabel}>Aadhar</Text>
-                <Text style={styles.metaValue}>{guest.aadharNumber}</Text>
+                <Text style={styles.metaValue}>•••• {guest.aadhar_last4}</Text>
               </View>
             )}
             <View style={styles.metaItem}>
               <Text style={styles.metaLabel}>Type</Text>
               <Text style={styles.metaValue}>
-                {guest.guestType === 'temp' ? 'Temporary' : 'Permanent'}
+                {guest.guest_type === 'temporary' ? 'Temporary' : 'Permanent'}
               </Text>
             </View>
-            {!!guest.stayDuration && (
+            {!!guest.stay_duration && (
               <View style={styles.metaItem}>
                 <Text style={styles.metaLabel}>Stay</Text>
                 <Text style={styles.metaValue}>
-                  {guest.stayDuration} {guest.stayUnit ?? 'months'}
+                  {guest.stay_duration} {guest.stay_unit ?? 'months'}
                 </Text>
               </View>
             )}
             <View style={styles.metaItem}>
               <Text style={styles.metaLabel}>Food</Text>
               <Text style={styles.metaValue}>
-                {guest.food ? (guest.foodType === 'non-veg' ? 'Non-Veg' : 'Veg') : 'No'}
+                {guest.has_food ? (guest.food_type === 'non_veg' ? 'Non-Veg' : guest.food_type === 'eggetarian' ? 'Eggetarian' : 'Veg') : 'No'}
               </Text>
             </View>
           </View>
 
-          {!!guest.permanentAddress && (
+          {!!guest.permanent_address && (
             <View style={styles.addressBox}>
               <Text style={styles.metaLabel}>Permanent Address</Text>
-              <Text style={[styles.metaValue, { textAlign: 'center', marginTop: 4 }]}>{guest.permanentAddress}</Text>
+              <Text style={[styles.metaValue, { textAlign: 'center', marginTop: 4 }]}>{guest.permanent_address}</Text>
             </View>
           )}
 
@@ -175,7 +221,7 @@ export default function GuestDetailScreen({ navigation, route }) {
               </Text>
             </View>
             <Text style={styles.rentSub}>
-              {formatINR(paid)} received of {formatINR(guest.monthlyRent)}
+              {formatINR(paidThisMonth)} received of {formatINR(guest.monthly_rent)}
             </Text>
             <PrimaryButton
               title="Record payment"
@@ -187,15 +233,15 @@ export default function GuestDetailScreen({ navigation, route }) {
         )}
 
         <Text style={styles.sectionTitle}>Payment history</Text>
-        {guestPayments.length === 0 ? (
+        {payments.length === 0 ? (
           <Text style={styles.emptyHistory}>No payments recorded yet.</Text>
         ) : (
-          guestPayments.map((p) => (
+          payments.map((p) => (
             <View key={p.id} style={styles.paymentRow}>
               <View style={styles.paymentInfo}>
-                <Text style={styles.paymentMonth}>Rent · {monthLabel(p.forMonth)}</Text>
+                <Text style={styles.paymentMonth}>Rent · {monthLabel(p.for_month?.slice(0, 7))}</Text>
                 <Text style={styles.paymentMeta}>
-                  {format(new Date(p.date), 'd MMM yyyy')} · {p.method}
+                  {p.paid_at ? format(new Date(p.paid_at), 'd MMM yyyy') : ''} · {p.method}
                 </Text>
               </View>
               <Text style={styles.paymentAmount}>{formatINR(p.amount)}</Text>
@@ -205,20 +251,16 @@ export default function GuestDetailScreen({ navigation, route }) {
 
         <View style={styles.dangerSection}>
           {guest.active ? (
-            <TouchableOpacity style={styles.moveOutButton} onPress={handleMoveOut} activeOpacity={0.8} testID="move-out">
+            <TouchableOpacity style={styles.moveOutButton} onPress={handleMoveOut} activeOpacity={0.8} disabled={busy} testID="move-out">
               <LogOut color={theme.colors.text} size={18} strokeWidth={2.2} />
               <Text style={styles.moveOutText}>Mark as moved out</Text>
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity style={styles.moveOutButton} onPress={handleReactivate} activeOpacity={0.8} testID="reactivate">
+            <TouchableOpacity style={styles.moveOutButton} onPress={handleReactivate} activeOpacity={0.8} disabled={busy} testID="reactivate">
               <RotateCcw color={theme.colors.text} size={18} strokeWidth={2.2} />
               <Text style={styles.moveOutText}>Reactivate guest</Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={styles.deleteButton} onPress={handleDelete} activeOpacity={0.8} testID="delete-guest">
-            <Trash2 color={theme.colors.error} size={18} strokeWidth={2.2} />
-            <Text style={styles.deleteText}>Delete guest</Text>
-          </TouchableOpacity>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -227,6 +269,8 @@ export default function GuestDetailScreen({ navigation, route }) {
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: theme.colors.background },
+  loading: { marginTop: theme.spacing.xxl },
+  errorText: { ...theme.typography.body, color: theme.colors.error, textAlign: 'center', margin: theme.spacing.lg },
   content: { padding: theme.spacing.lg, paddingTop: theme.spacing.sm },
   editButton: {
     width: 40,
@@ -258,7 +302,6 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing.sm,
     overflow: 'hidden',
   },
-  profileImage: { width: '100%', height: '100%' },
   avatarText: { ...theme.typography.h2 },
   name: { ...theme.typography.h2, textAlign: 'center' },
   statusBadge: {
@@ -346,14 +389,4 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
   },
   moveOutText: { ...theme.typography.body, fontFamily: 'PlusJakartaSans_600SemiBold' },
-  deleteButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: theme.spacing.sm,
-    backgroundColor: theme.colors.error + '10',
-    borderRadius: theme.borderRadius.full,
-    paddingVertical: 14,
-  },
-  deleteText: { ...theme.typography.body, fontFamily: 'PlusJakartaSans_600SemiBold', color: theme.colors.error },
 });
