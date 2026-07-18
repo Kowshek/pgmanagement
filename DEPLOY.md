@@ -59,24 +59,15 @@ JWT_SECRET=<generate one — see below, don't reuse the local dev one>
 JWT_ALGORITHM=HS256
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES=15
 JWT_REFRESH_TOKEN_EXPIRE_DAYS=30
-DATABASE_URL=postgresql+asyncpg://${{Postgres.PGUSER}}:${{Postgres.PGPASSWORD}}@${{Postgres.PGHOST}}:${{Postgres.PGPORT}}/${{Postgres.PGDATABASE}}
+DATABASE_URL=${{Postgres.DATABASE_URL}}
 REDIS_URL=${{Redis.REDIS_URL}}
 CORS_EXTRA_ORIGINS=
 ```
 
 Notes on these:
-- The `${{Postgres.PGUSER}}`-style syntax is Railway's variable reference format —
-  it pulls the live value from the Postgres service you added in step 1, so you
-  never hand-copy a connection string. Type it exactly as shown (Railway
-  autocompletes these if you type `${{` and pick from the list).
-- **`DATABASE_URL` must be built piece-by-piece like this, not just
-  `${{Postgres.DATABASE_URL}}` on its own.** Railway's own Postgres connection
-  string uses the plain `postgresql://` scheme; this app's SQLAlchemy setup uses
-  the `asyncpg` driver, which needs `postgresql+asyncpg://` specifically, or every
-  DB call fails at startup. Building the URL from the individual `PGUSER`/
-  `PGPASSWORD`/`PGHOST`/`PGPORT`/`PGDATABASE` pieces with the right scheme
-  prefixed avoids that mismatch.
-- `REDIS_URL` doesn't have this problem — `${{Redis.REDIS_URL}}` works as-is.
+- The `${{Postgres.DATABASE_URL}}`-style syntax is Railway's variable reference format —
+  it pulls the live connection string from the Postgres service you added in step 1.
+- `REDIS_URL` works similarly — `${{Redis.REDIS_URL}}` pulls from the Redis service.
 - Generate `JWT_SECRET` locally, don't reuse your dev `.env` value:
   `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`
 - Leave `CORS_EXTRA_ORIGINS` blank for now — comes back in step 4 once you know
