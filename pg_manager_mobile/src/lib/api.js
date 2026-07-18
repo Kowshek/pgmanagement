@@ -14,11 +14,13 @@ const REFRESH_TOKEN_KEY = '@pgmanager/refresh_token';
 
 function defaultBaseUrl() {
   if (process.env.EXPO_PUBLIC_API_URL) return process.env.EXPO_PUBLIC_API_URL;
-  // Android emulator maps the host machine's localhost to 10.0.2.2. iOS
-  // simulator and Expo web share the host network directly, so localhost
-  // works there. A physical device (Expo Go on your phone) needs the host
-  // machine's LAN IP instead — set EXPO_PUBLIC_API_URL in a .env file for
-  // that case (see the run instructions).
+  
+  // In production (Cloudflare Pages), always use the live Railway backend
+  if (process.env.NODE_ENV === 'production') {
+    return 'https://pgmanagement-production.up.railway.app';
+  }
+
+  // Local development fallbacks
   return Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://localhost:8000';
 }
 
