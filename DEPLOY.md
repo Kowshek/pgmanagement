@@ -100,11 +100,7 @@ Notes on these:
    into the JS bundle at build time — Expo only picks up `EXPO_PUBLIC_*` vars
    during the build, not at runtime, so if you ever change the backend URL you
    must trigger a rebuild, not just redeploy.
-4. Deploy. Cloudflare gives you a `*.pages.dev` URL.
-5. `public/_redirects` (already added, contains `/*  /index.html  200`) ships into
-   `dist/` automatically and makes deep links / page refreshes work instead of
-   404ing — Cloudflare Pages is a static host, it doesn't know about your app's
-   routes without it.
+4. Deploy. Cloudflare gives you a `*.pages.dev` URL. Cloudflare Pages natively supports single-page applications, so deep links and page refreshes will work automatically.
 
 ## 5. Close the loop: CORS
 
