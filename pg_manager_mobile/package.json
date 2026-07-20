@@ -36,7 +36,9 @@
     "web": "expo start --web",
     "build:web": "expo export --platform web",
     "test": "jest",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "deploy": "npx expo export -p web && wrangler deploy",
+    "preview": "npx expo export -p web && wrangler dev"
   },
   "jest": {
     "preset": "jest-expo",
@@ -53,6 +55,7 @@
     "eslint": "^9.0.0",
     "eslint-config-expo": "~57.0.0",
     "jest": "~29.7.0",
-    "jest-expo": "~57.0.1"
+    "jest-expo": "~57.0.1",
+    "wrangler": "^4.112.0"
   }
 }
