@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { UserPlus } from 'lucide-react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 
 import FormField from '../components/FormField';
 import PrimaryButton from '../components/PrimaryButton';
@@ -43,9 +44,14 @@ export default function RegisterScreen({ navigation }) {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.hero}>
-            <View style={styles.iconCircle}>
-              <UserPlus color={theme.colors.primary} size={32} strokeWidth={2} />
-            </View>
+            <LinearGradient
+              colors={['#2C2C2C', '#111111']}
+              style={styles.iconCircle}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+            >
+              <UserPlus color="#FFFFFF" size={32} strokeWidth={2} />
+            </LinearGradient>
             <Text style={styles.title}>Create your account</Text>
             <Text style={styles.subtitle}>Set up an account to start managing your PG.</Text>
           </View>
@@ -113,9 +119,6 @@ const styles = StyleSheet.create({
     width: 72,
     height: 72,
     borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.surface,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: theme.spacing.lg,

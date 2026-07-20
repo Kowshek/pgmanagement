@@ -217,7 +217,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     ...theme.shadows.sm,
   },
-  listContainer: { paddingHorizontal: theme.spacing.lg, paddingBottom: theme.spacing.xl, flexGrow: 1 },
+  listContainer: { paddingHorizontal: theme.spacing.lg, paddingBottom: 120, flexGrow: 1 },
   roomCard: {
     padding: theme.spacing.lg,
     backgroundColor: theme.colors.surface,

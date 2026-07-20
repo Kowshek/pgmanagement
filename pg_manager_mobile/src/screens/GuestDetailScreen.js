@@ -4,6 +4,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { format } from 'date-fns';
 import { LogOut, Pencil, Phone, RotateCcw } from 'lucide-react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import * as Haptics from 'expo-haptics';
 
 import BackHeader from '../components/BackHeader';
 import PrimaryButton from '../components/PrimaryButton';
@@ -120,7 +122,10 @@ export default function GuestDetailScreen({ navigation, route }) {
         right={
           <TouchableOpacity
             style={styles.editButton}
-            onPress={() => navigation.navigate('GuestForm', { guestId: guest.id })}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+              navigation.navigate('GuestForm', { guestId: guest.id });
+            }}
             accessibilityRole="button"
             accessibilityLabel="Edit guest"
             testID="edit-guest"
@@ -131,9 +136,14 @@ export default function GuestDetailScreen({ navigation, route }) {
       />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.profileCard}>
-          <View style={styles.avatar}>
+          <LinearGradient
+            colors={['#E3F2FD', '#90CAF9']}
+            style={styles.avatar}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+          >
             <Text style={styles.avatarText}>{initialsOf(guest.full_name)}</Text>
-          </View>
+          </LinearGradient>
           <Text style={styles.name}>{guest.full_name}</Text>
           <View style={[styles.statusBadge, guest.active ? styles.badgeActive : styles.badgeMuted]}>
             <Text style={[styles.statusText, guest.active ? styles.statusTextActive : styles.statusTextMuted]}>
@@ -296,13 +306,12 @@ const styles = StyleSheet.create({
     width: 72,
     height: 72,
     borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.background,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: theme.spacing.sm,
     overflow: 'hidden',
   },
-  avatarText: { ...theme.typography.h2 },
+  avatarText: { ...theme.typography.h2, color: '#1565C0' },
   name: { ...theme.typography.h2, textAlign: 'center' },
   statusBadge: {
     marginTop: theme.spacing.xs,

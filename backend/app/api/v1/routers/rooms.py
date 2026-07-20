@@ -94,6 +94,7 @@ async def update_room(
     room_id: uuid.UUID,
     request: RoomUpdateRequest,
     member: PropertyMember = Depends(require_role("staff")),
+    room_service: RoomService = Depends(get_room_service),
     room_repo: RoomRepository = Depends(get_room_repo),
     guest_repo: GuestRepository = Depends(get_guest_repo),
     db: AsyncSession = Depends(get_db)
@@ -110,7 +111,7 @@ async def update_room(
     update_data["updated_by"] = member.user_id
 
     try:
-        updated_room = await room_repo.update(room_id, **update_data)
+        updated_room = await room_service.update_room(room_id, **update_data)
         if not updated_room:
             await db.rollback()
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Room not found")
@@ -118,6 +119,12 @@ async def update_room(
         await db.commit()
         guests = await guest_repo.list_by_property(property_id, active=True, room_id=room_id)
         return serialize_room(updated_room, guests)
+    except DuplicateRoomNumberError as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except ValueError as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception:
         await db.rollback()
         raise

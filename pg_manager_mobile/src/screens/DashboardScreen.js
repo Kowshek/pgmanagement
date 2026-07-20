@@ -14,15 +14,22 @@ import {
 } from 'lucide-react-native';
 
 import EmptyState from '../components/EmptyState';
+import PrimaryButton from '../components/PrimaryButton';
 import { formatINR, initialsOf } from '../lib/format';
 import { monthKeyOf, monthLabel } from '../lib/rent';
 import { statsApi, ApiError } from '../lib/api';
 import { useStore } from '../store/useStore';
 import { theme } from '../theme/theme';
+import * as Haptics from 'expo-haptics';
+import { LinearGradient } from 'expo-linear-gradient';
 
 function StatCard({ title, value, icon: Icon, color }) {
   return (
-    <View style={styles.card}>
+    <TouchableOpacity
+      style={styles.card}
+      activeOpacity={0.7}
+      onPress={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => { })}
+    >
       <View style={[styles.iconContainer, { backgroundColor: color + '15' }]}>
         <Icon color={color} size={22} strokeWidth={2.5} />
       </View>
@@ -30,7 +37,7 @@ function StatCard({ title, value, icon: Icon, color }) {
         <Text style={styles.cardValue}>{value}</Text>
         <Text style={styles.cardTitle}>{title}</Text>
       </View>
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -159,12 +166,20 @@ export default function DashboardScreen({ navigation }) {
                   <TouchableOpacity
                     key={entry.guest_id}
                     style={styles.dueRow}
-                    onPress={() => navigation.navigate('GuestDetail', { guestId: entry.guest_id })}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => { });
+                      navigation.navigate('GuestDetail', { guestId: entry.guest_id });
+                    }}
                     activeOpacity={0.7}
                   >
-                    <View style={styles.dueAvatar}>
+                    <LinearGradient
+                      colors={['#E3F2FD', '#BBDEFB']}
+                      style={styles.dueAvatar}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                    >
                       <Text style={styles.dueAvatarText}>{initialsOf(entry.guest_name)}</Text>
-                    </View>
+                    </LinearGradient>
                     <View style={styles.dueInfo}>
                       <Text style={styles.dueName} numberOfLines={1}>
                         {entry.guest_name}
@@ -180,20 +195,19 @@ export default function DashboardScreen({ navigation }) {
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Quick actions</Text>
               <View style={styles.actionGrid}>
-                <TouchableOpacity
-                  style={styles.actionButton}
-                  onPress={() => navigation.navigate('GuestForm')}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.actionText}>Add guest</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.actionButtonSecondary}
-                  onPress={() => navigation.navigate('RecordPayment')}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.actionTextSecondary}>Record payment</Text>
-                </TouchableOpacity>
+                <View style={{ flex: 1 }}>
+                  <PrimaryButton
+                    title="Add guest"
+                    onPress={() => navigation.navigate('GuestForm')}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <PrimaryButton
+                    title="Payment"
+                    variant="secondary"
+                    onPress={() => navigation.navigate('RecordPayment')}
+                  />
+                </View>
               </View>
             </View>
           </>
@@ -222,7 +236,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     fontSize: 12,
   },
-  pgName: { ...theme.typography.h1 },
+  pgName: { ...theme.typography.h1, textTransform: 'capitalize' },
   settingsButton: {
     width: 44,
     height: 44,
@@ -290,11 +304,10 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.background,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  dueAvatarText: { ...theme.typography.body, fontFamily: 'PlusJakartaSans_700Bold' },
+  dueAvatarText: { ...theme.typography.body, fontFamily: 'PlusJakartaSans_700Bold', color: '#1565C0' },
   dueInfo: { flex: 1 },
   dueName: { ...theme.typography.body, fontFamily: 'PlusJakartaSans_600SemiBold' },
   dueAmount: {
@@ -302,37 +315,11 @@ const styles = StyleSheet.create({
     fontFamily: 'PlusJakartaSans_700Bold',
     color: theme.colors.error,
   },
+  dueAmount: {
+    ...theme.typography.body,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: theme.colors.error,
+  },
   actionGrid: { flexDirection: 'row', gap: theme.spacing.md },
-  actionButton: {
-    flex: 1,
-    backgroundColor: theme.colors.primary,
-    paddingVertical: 18,
-    borderRadius: theme.borderRadius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...theme.shadows.md,
-  },
-  actionText: {
-    ...theme.typography.body,
-    color: '#FFFFFF',
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    fontSize: 16,
-  },
-  actionButtonSecondary: {
-    flex: 1,
-    backgroundColor: theme.colors.surface,
-    paddingVertical: 18,
-    borderRadius: theme.borderRadius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-  },
-  actionTextSecondary: {
-    ...theme.typography.body,
-    color: theme.colors.primary,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    fontSize: 16,
-  },
-  bottomSpacer: { height: 40 },
+  bottomSpacer: { height: 120 },
 });

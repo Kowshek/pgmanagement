@@ -5,6 +5,7 @@ from app.models.room import Room, RoomType
 from app.repositories.room_repository import RoomRepository
 from app.repositories.guest_repository import GuestRepository
 from app.core.exceptions import DuplicateRoomNumberError, RoomInUseError
+from app.services.occupancy import occupancy_of
 
 class RoomService:
     def __init__(self, room_repo: RoomRepository, guest_repo: GuestRepository = None):
@@ -37,6 +38,30 @@ class RoomService:
             created_by=created_by,
             updated_by=created_by
         )
+
+    async def update_room(
+        self,
+        room_id: uuid.UUID,
+        **fields
+    ) -> Room:
+        room = await self.room_repo.get_by_id(room_id)
+        if not room:
+            return None
+            
+        if "room_number" in fields and fields["room_number"] != room.room_number:
+            existing_room = await self.room_repo.get_by_property_and_number(room.property_id, fields["room_number"])
+            if existing_room and existing_room.id != room_id:
+                raise DuplicateRoomNumberError(f"Room number {fields['room_number']} already exists in this property.")
+                
+        if "capacity" in fields and self.guest_repo:
+            new_capacity = fields["capacity"]
+            if new_capacity < room.capacity:
+                guests = await self.guest_repo.list_by_property(room.property_id, active=True, room_id=room_id)
+                current_occupancy = occupancy_of(guests)
+                if new_capacity < current_occupancy:
+                    raise ValueError(f"Cannot reduce capacity to {new_capacity}. Room currently has {current_occupancy} beds occupied.")
+                    
+        return await self.room_repo.update(room_id, **fields)
 
     async def delete_room(self, room_id: uuid.UUID) -> None:
         """

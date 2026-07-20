@@ -35,22 +35,24 @@ async def test_add_guest_validation_errors():
         )
 
 @pytest.mark.asyncio
-async def test_add_guest_concurrency(db_session):
+async def test_add_guest_concurrency(test_engine):
     from app.repositories.guest_repository import GuestRepository
     from app.repositories.room_repository import RoomRepository
     from app.models.user import User
     from app.models.property import Property
     
     owner = User(id=uuid.uuid4(), email="concur_guest@ex.com", password_hash="h", full_name="O", is_active=True)
-    db_session.add(owner)
-    await db_session.flush()  # owner must be INSERTed before rows FK-referencing it (no relationship() defined to auto-order)
     prop = Property(id=uuid.uuid4(), owner_id=owner.id, name="Concur Prop")
-    db_session.add(prop)
-    
-    # Room with exactly 1 capacity
     room = Room(id=uuid.uuid4(), property_id=prop.id, room_number="101", room_type=RoomType.SINGLE, capacity=1)
-    db_session.add(room)
-    await db_session.commit()
+    
+    async with test_engine.begin() as conn:
+        from sqlalchemy.ext.asyncio import AsyncSession
+        session = AsyncSession(bind=conn)
+        session.add(owner)
+        await session.flush()
+        session.add(prop)
+        session.add(room)
+        await session.flush()
     
     # To test actual PostgreSQL FOR UPDATE concurrency locks without deadlocking Pytest,
     # we explicitly orchestrate two completely independent asynchronous session factories.

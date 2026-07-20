@@ -240,7 +240,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing.lg,
     marginBottom: theme.spacing.md,
   },
-  listContainer: { paddingHorizontal: theme.spacing.lg, paddingBottom: theme.spacing.xl, flexGrow: 1 },
+  listContainer: { paddingHorizontal: theme.spacing.lg, paddingBottom: 120, flexGrow: 1 },
   guestCard: {
     flexDirection: 'row',
     alignItems: 'center',

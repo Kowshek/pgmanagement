@@ -100,7 +100,14 @@ Notes on these:
    into the JS bundle at build time — Expo only picks up `EXPO_PUBLIC_*` vars
    during the build, not at runtime, so if you ever change the backend URL you
    must trigger a rebuild, not just redeploy.
-4. Deploy. Cloudflare gives you a `*.pages.dev` URL. Cloudflare Pages natively supports single-page applications, so deep links and page refreshes will work automatically.
+4. Deploy. Cloudflare gives you a production URL — check your browser address bar
+   / the Cloudflare dashboard for the actual value rather than assuming the shape:
+   it's usually `*.pages.dev`, but Cloudflare's current dashboard flow sometimes
+   deploys static sites as a Worker with static assets instead of classic Pages,
+   which gives you `<project>.<account-subdomain>.workers.dev` instead. Either way
+   it's a single stable origin — use whichever one you actually got. Cloudflare
+   Pages natively supports single-page applications, so deep links and page
+   refreshes will work automatically.
 
 ## 5. Close the loop: CORS
 
@@ -109,13 +116,23 @@ The backend only accepts cross-origin requests from origins you explicitly allow
 API service → Variables, and set:
 
 ```
-CORS_EXTRA_ORIGINS=https://<your-project>.pages.dev
+CORS_EXTRA_ORIGINS=https://<your-actual-frontend-domain-from-step-4>
 ```
 
-Save — Railway redeploys automatically on variable changes. Until you do this, the
-deployed frontend can reach the API from a phone/emulator (native isn't subject to
-CORS) but a browser tab hitting your `.pages.dev` URL will get CORS errors on every
-API call. Easy to forget because everything else "works" without it — don't skip it.
+Copy the exact origin from the browser address bar (or from the CORS error message
+if you already hit one) — scheme + host, no trailing slash, no path. If Cloudflare
+gives you both a stable production domain and a per-deploy preview domain that
+changes every push, use the stable one here, or this breaks again on your next
+deploy.
+
+Save — Railway redeploys automatically on variable changes. Until you do this (or
+if the value doesn't match the real origin exactly — typos, trailing slash, http
+vs https, or a guessed `.pages.dev` when you actually got a `.workers.dev` domain
+all count as "doesn't match"), the deployed frontend can reach the API from a
+phone/emulator (native isn't subject to CORS) but a browser tab will get CORS
+errors on every API call, usually surfacing first on register/login. Easy to
+forget because everything else "works" without it — don't skip it, and don't
+guess the value, copy it.
 
 ## 6. Smoke test
 

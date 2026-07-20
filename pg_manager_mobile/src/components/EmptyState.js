@@ -1,6 +1,7 @@
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
+import PrimaryButton from './PrimaryButton';
 import { theme } from '../theme/theme';
 
 export default function EmptyState({ icon: Icon, title, message, actionLabel, onAction }) {
@@ -14,9 +15,9 @@ export default function EmptyState({ icon: Icon, title, message, actionLabel, on
       <Text style={styles.title}>{title}</Text>
       {!!message && <Text style={styles.message}>{message}</Text>}
       {!!actionLabel && (
-        <TouchableOpacity style={styles.action} onPress={onAction} activeOpacity={0.8}>
-          <Text style={styles.actionText}>{actionLabel}</Text>
-        </TouchableOpacity>
+        <View style={styles.actionWrapper}>
+          <PrimaryButton title={actionLabel} onPress={onAction} />
+        </View>
       )}
     </View>
   );
@@ -37,17 +38,9 @@ const styles = StyleSheet.create({
   },
   title: { ...theme.typography.h3, marginBottom: theme.spacing.xs, textAlign: 'center' },
   message: { ...theme.typography.bodySecondary, textAlign: 'center', lineHeight: 22 },
-  action: {
+  actionWrapper: {
     marginTop: theme.spacing.lg,
-    backgroundColor: theme.colors.primary,
-    paddingHorizontal: theme.spacing.xl,
-    paddingVertical: 14,
-    borderRadius: theme.borderRadius.full,
-    ...theme.shadows.sm,
-  },
-  actionText: {
-    ...theme.typography.body,
-    color: '#FFFFFF',
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    alignSelf: 'stretch',
+    paddingHorizontal: theme.spacing.lg,
   },
 });
