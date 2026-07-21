@@ -13,14 +13,16 @@ const ACCESS_TOKEN_KEY = '@pgmanager/access_token';
 const REFRESH_TOKEN_KEY = '@pgmanager/refresh_token';
 
 function defaultBaseUrl() {
-  if (process.env.EXPO_PUBLIC_API_URL) return process.env.EXPO_PUBLIC_API_URL;
-  
-  // In production (Cloudflare Pages), always use the live Railway backend
+  // Production wins unconditionally — checked first and returns immediately,
+  // so a stray/leaked EXPO_PUBLIC_API_URL (e.g. a local .env that shouldn't
+  // have been committed) can never override this in a real production build
+  // again. This exact ordering bug is what shipped localhost:8000 to prod.
   if (process.env.NODE_ENV === 'production') {
     return 'https://pgmanagement-production.up.railway.app';
   }
 
-  // Local development fallbacks
+  // Local dev only: explicit override, then platform-specific fallback.
+  if (process.env.EXPO_PUBLIC_API_URL) return process.env.EXPO_PUBLIC_API_URL;
   return Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://localhost:8000';
 }
 
